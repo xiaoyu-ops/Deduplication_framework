@@ -1,0 +1,71 @@
+accelerate==1.10.0
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.15
+aiosignal==1.4.0
+async-timeout==5.0.1
+attrs==25.3.0
+brotlicffi @ file:///C:/b/abs_f4lixvzmxt/croot/brotlicffi_1736183286104/work
+certifi @ file:///C:/b/abs_2bz30lzohz/croot/certifi_1754570654565/work/certifi
+cffi @ file:///C:/b/abs_29_b57if3f/croot/cffi_1736184144340/work
+chardet==5.2.0
+charset-normalizer @ file:///croot/charset-normalizer_1721748349566/work
+colorama==0.4.6
+contourpy==1.3.0
+cycler==0.12.1
+datasets==4.0.0
+dill==0.3.8
+filelock==3.13.1
+fonttools==4.59.0
+frozenlist==1.7.0
+fsspec==2024.6.1
+gmpy2 @ file:///C:/b/abs_d8ki0o0h97/croot/gmpy2_1738085498525/work
+huggingface-hub==0.34.4
+idna==3.10
+importlib_resources==6.5.2
+Jinja2==3.1.4
+joblib==1.5.1
+kiwisolver==1.4.7
+MarkupSafe==2.1.5
+matplotlib==3.9.4
+mkl-service==2.4.0
+mkl_fft @ file:///C:/Users/dev-admin/mkl/mkl_fft_1730823082242/work
+mkl_random @ file:///C:/Users/dev-admin/mkl/mkl_random_1730822522280/work
+mpmath==1.3.0
+multidict==6.6.3
+multiprocess==0.70.16
+networkx==3.2.1
+numpy @ file:///C:/b/abs_0123vcxhf8/croot/numpy_and_numpy_base_1725470331966/work/dist/numpy-2.0.1-cp39-cp39-win_amd64.whl#sha256=afd4c53d4b548db7b600782fd4368ad419de0533ac199a031101a0b99df7eaf7
+packaging==25.0
+pandas==2.3.1
+pillow==11.0.0
+propcache==0.3.2
+psutil==7.0.0
+pyarrow==21.0.0
+pycparser @ file:///tmp/build/80754af9/pycparser_1636541352034/work
+pyparsing==3.2.3
+PySocks @ file:///C:/ci/pysocks_1605307512533/work
+python-dateutil==2.9.0.post0
+pytz==2025.2
+PyYAML @ file:///C:/b/abs_14xkfs39bx/croot/pyyaml_1728657968772/work
+regex==2025.7.34
+requests @ file:///C:/b/abs_0b3h9d_724/croot/requests_1750426345668/work
+safetensors==0.6.2
+scikit-learn==1.6.1
+scipy==1.13.1
+seaborn==0.13.2
+six==1.17.0
+sympy==1.13.1
+threadpoolctl==3.6.0
+tokenizers==0.21.4
+torch==2.5.1+cu121
+torchaudio==2.5.1+cu121
+torchvision==0.20.1+cu121
+tqdm==4.67.1
+transformers==4.55.0
+typing_extensions==4.12.2
+tzdata==2025.2
+urllib3 @ file:///C:/b/abs_393g1ayee_/croot/urllib3_1750775481226/work
+win-inet-pton @ file:///C:/ci/win_inet_pton_1605306162074/work
+xxhash==3.5.0
+yarl==1.20.1
+zipp==3.23.0

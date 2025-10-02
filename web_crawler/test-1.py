@@ -1,3 +1,16 @@
+"""
+暂时废弃爬虫的尝试 2025-10-02
+"""
+
+
+
+
+
+
+
+
+
+
 # import asyncio
 # from crawl4ai import AsyncWebCrawler
 
