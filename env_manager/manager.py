@@ -137,6 +137,37 @@ class EnvManager:
             print(f"运行命令时出错: {e}")
             print(f"错误类型: {type(e)}")
             raise
+
+    def setup_audio_env(self):
+        """设置音频去重环境"""
+        try:
+            self.activate_vene(r"C:\Users\sysu\anaconda3\envs\audio")
+            print(f"音频环境已激活: {self._current_venv['name']}")
+            return True
+        except Exception as e:
+            print(f"音频环境激活失败: {e}")
+            return False
+    
+    def setup_text_env(self):
+        """设置文本去重环境"""
+        try:
+            self.activate_vene(r"C:\Users\sysu\anaconda3\envs\text-dedup")
+            print(f"文本环境已激活: {self._current_venv['name']}")
+            return True
+        except Exception as e:
+            print(f"文本环境激活失败: {e}")
+            return False
+    
+    def setup_image_env(self):
+        """设置图像去重环境"""
+        try:
+            # 假设你有一个图像处理的环境
+            self.activate_vene(r"c:\Users\sysu\anaconda3\envs\tryamrosemdedup")
+            print(f"图像环境已激活: {self._current_venv['name']}")
+            return True
+        except Exception as e:
+            print(f"图像环境激活失败: {e}")
+            return False        
     
     
 # 测试一下
@@ -181,15 +212,15 @@ if __name__ == "__main__":
 
     try:
         # 激活audio环境
-        switcher.activate_vene(r"C:\Users\sysu\anaconda3\envs\audio")
-        print(f"切换到虚拟环境: {switcher._current_venv['path']}")
-        print(f"Python 路径: {switcher._current_venv['python']}")
+        setup_success = switcher.setup_audio_env()
+        print(setup_success)
         res = switcher.run_command("python --version")
         print(f"返回码: {res.returncode}")
         print(f"输出: {res.stdout.strip()}")
 
         # 激活text环境
-        switcher.activate_vene(r"C:\Users\sysu\anaconda3\envs\text-dedup")
+        setup_success = switcher.setup_text_env()
+        print(setup_success)
         print(f"切换到虚拟环境: {switcher._current_venv['path']}")
         print(f"Python 路径: {switcher._current_venv['python']}")
         res = switcher.run_command("python --version")
@@ -197,7 +228,8 @@ if __name__ == "__main__":
         print(f"输出: {res.stdout.strip()}")
 
         # 激活image环境
-        switcher.activate_vene(r"c:\Users\sysu\anaconda3\envs\tryamrosemdedup")
+        setup_success = switcher.setup_image_env()
+        print(setup_success)
         print(f"切换到虚拟环境: {switcher._current_venv['path']}")
         print(f"Python 路径: {switcher._current_venv['python']}")
         res = switcher.run_command("python --version")
