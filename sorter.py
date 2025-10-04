@@ -5,6 +5,7 @@
 
 import os
 import json
+import shutil
 from pathlib import Path
 from tqdm import tqdm
 import time
@@ -17,7 +18,6 @@ def read_files_from_directory(directory):
             all_files.append(os.path.join(root, file))
     return all_files
 
-
 def is_image_url(u: str):
     # 如果 url 字段中包含图片后缀（如 .jpg/.jpeg/.png/.gif），归为 image
     if not isinstance(u, str):
@@ -25,94 +25,185 @@ def is_image_url(u: str):
     u_low = u.lower()
     return any(ext in u_low for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'])
 
-def put_file_in_category(file_path, category, output_base_dir):
+def safe_move_file(src_path, dst_path, max_retries=3):
+    """安全移动文件，处理占用问题"""
+    for attempt in range(max_retries):
+        try:
+            # 确保目标目录存在
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            
+            # 如果目标文件已存在，生成新名称
+            counter = 1
+            original_dst = dst_path
+            while os.path.exists(dst_path):
+                name, ext = os.path.splitext(original_dst)
+                dst_path = f"{name}_{counter}{ext}"
+                counter += 1
+            
+            # 尝试移动文件
+            shutil.move(src_path, dst_path)
+            print(f"已将文件 {src_path} 移动到 {dst_path}")
+            return True
+            
+        except PermissionError as e:
+            print(f"文件被占用，尝试 {attempt + 1}/{max_retries}: {src_path}")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # 等待1秒后重试
+            else:
+                print(f"文件移动失败，可能被其他程序占用: {src_path}")
+                print("请关闭可能占用该文件的程序如VSCode、记事本等")
+                return False
+        except Exception as e:
+            print(f"移动文件时出现未知错误: {e}")
+            return False
+    
+    return False
+
+def put_file_in_category(file_path, category):
     """将文件移动到对应类别的文件夹中"""
-    category_dir = os.path.join(output_base_dir, category)
-    os.makedirs(category_dir, exist_ok=True)
-    dest_path = os.path.join(category_dir, os.path.basename(file_path))
-    os.rename(file_path, dest_path)
-    print(f"已将文件 {file_path} 移动到 {dest_path}")
-
-def put_file_in_image_category(file_path, output_base_dir=r"D:\桌面\Deduplication_framework\image\dataset"):
-    put_file_in_category(file_path, 'image', output_base_dir)
-
-def put_file_in_audio_category(file_path, output_base_dir=r"D:\桌面\Deduplication_framework\audio\dataset"):
-    put_file_in_category(file_path, 'audio', output_base_dir)
-
-def put_file_in_text_category(file_path, output_base_dir=r"D:\桌面\Deduplication_framework\text\dataset"):
-    put_file_in_category(file_path, 'text', output_base_dir)
+    base_dir = r"D:\桌面\Deduplication_framework"
+    category_dir = os.path.join(base_dir, category, "dataset")  # 修复路径重复问题
+    
+    filename = os.path.basename(file_path)
+    dest_path = os.path.join(category_dir, filename)
+    
+    return safe_move_file(file_path, dest_path)
 
 def sorter(files):
-        """根据文件类型将文件分类到 audio、image、text"""
-        startst_time = time.time()
-        for file_path in tqdm(files, desc="分类进度"):
-            file_extension = Path(file_path).suffix.lower()
+    """根据文件类型将文件分类到 audio、image、text"""
+    start_time = time.time()
+    success_count = 0
+    fail_count = 0
+    
+    for file_path in tqdm(files, desc="分类进度"):
+        file_extension = Path(file_path).suffix.lower()
+        category = None
+        
+        try:
             if file_extension in ['.wav', '.mp3']:
                 category = 'audio'
+                
             elif file_extension in ['.png', '.jpg', '.jpeg']:
                 category = 'image'
+                
             elif file_extension == '.json':
                 # 读取json文件内容以判定类型
                 with open(file_path, 'r', encoding='utf-8') as f:
                     try:
                         data = json.load(f)
-                        if isinstance(data, list) and all('text' in item for item in data):
-                            category = 'text'
-                            put_file_in_text_category(file_path)
-                        elif isinstance(data, list) and all('audio' in item for item in data):
-                            category = 'audio'
-                            put_file_in_audio_category(file_path)
-                        elif isinstance(data, list) and all('image' in item for item in data):
-                            category = 'image'
-                            put_file_in_image_category(file_path)
-                        elif isinstance(data, list) and all('url' in item for item in data):
+                        
+                        if isinstance(data, list) and data:  # 确保列表不为空
+                            # 检查前几个元素或所有元素（最多检查前10个避免性能问题）
+                            sample_size = min(len(data), 10)
+                            sample_items = data[:sample_size]
                             
-                            if any(is_image_url(item['url']) for item in data):
+                            # 统计各种字段出现的次数
+                            text_count = 0
+                            audio_count = 0 
+                            image_count = 0
+                            image_url_count = 0
+                            
+                            for item in sample_items:
+                                if isinstance(item, dict):
+                                    # 检查文本字段
+                                    if any(key in item for key in ['text', 'content', 'title', 'article', 'sentence']):
+                                        text_count += 1
+                                    
+                                    # 检查音频字段
+                                    if any(key in item for key in ['audio', 'audio_url', 'audio_path', 'wav', 'mp3']):
+                                        audio_count += 1
+                                    
+                                    # 检查图片字段
+                                    if any(key in item for key in ['image', 'image_url', 'img', 'picture']):
+                                        image_count += 1
+                                    
+                                    # 检查URL是否指向图片
+                                    if 'url' in item and is_image_url(item.get('url', '')):
+                                        image_url_count += 1
+                            
+                            # 根据统计结果判断类型（选择占比最高的）
+                            total_checked = len(sample_items)
+                            
+                            if image_count > total_checked * 0.5 or image_url_count > total_checked * 0.5:
                                 category = 'image'
-                                put_file_in_image_category(file_path)
-                            # 如果全部是字符串并且看起来像网页链接，则可能是 text/url 列表
-                            elif all(isinstance(item['url'], str) and item['url'].lower().startswith('http') for item in data):
+                            elif audio_count > total_checked * 0.3:  # 音频字段阈值稍低
+                                category = 'audio'  
+                            elif text_count > total_checked * 0.3:  # 文本字段阈值稍低
                                 category = 'text'
-                                put_file_in_text_category(file_path)
+                            elif image_url_count > 0:  # 有任何图片URL就归类为image
+                                category = 'image'
+                            elif text_count > 0:  # 有任何文本字段就归类为text
+                                category = 'text'
                             else:
-                                print(f"无法判定JSON文件类型: {file_path}, 跳过...")
-                                continue
-                        else:
+                                # 如果都没有明确字段，根据URL特征判断
+                                urls = [item.get('url', '') for item in sample_items if isinstance(item, dict) and 'url' in item]
+                                if urls:
+                                    if any(is_image_url(url) for url in urls):
+                                        category = 'image'
+                                    elif all(isinstance(url, str) and url.lower().startswith('http') for url in urls):
+                                        category = 'text'  # 默认归为文本
+                        
+                        elif isinstance(data, dict):
+                            # 如果是单个对象
+                            if any(key in data for key in ['audio', 'audio_url', 'audio_path']):
+                                category = 'audio'
+                            elif any(key in data for key in ['image', 'image_url', 'img', 'picture']):
+                                category = 'image'
+                            elif any(key in data for key in ['text', 'content', 'title', 'article']):
+                                category = 'text'
+                            elif 'url' in data and is_image_url(data.get('url', '')):
+                                category = 'image'
+                        
+                        if not category:
                             print(f"无法判定JSON文件类型: {file_path}, 跳过...")
+                            fail_count += 1
                             continue
+                            
                     except json.JSONDecodeError:
                         print(f"无效的JSON文件: {file_path}, 跳过...")
+                        fail_count += 1
                         continue
             else:
                 print(f"不支持的文件类型: {file_path}, 跳过...")
+                fail_count += 1
                 continue
-            end_time = time.time()
-            print(f"分类器工作结束，耗时 {end_time - startst_time:.2f} 秒")
-
+            
+            # 移动文件
+            if category:
+                if put_file_in_category(file_path, category):
+                    success_count += 1
+                else:
+                    fail_count += 1
+                    
+        except Exception as e:
+            print(f"处理文件 {file_path} 时出错: {e}")
+            fail_count += 1
+    
+    end_time = time.time()
+    print(f"\n分类完成")
+    print(f"成功移动: {success_count} 个文件")
+    print(f"失败/跳过: {fail_count} 个文件")
+    print(f"总耗时: {end_time - start_time:.2f} 秒")
+    
+    return success_count > 0
 
 if __name__ == "__main__":
-    input_directory = "./mix_dataset"  # 输入目录
-    # output_directory = "./sorted_dataset"  # 输出目录
-
-    # 创建输出目录
-    # os.makedirs(output_directory, exist_ok=True)
-
+    input_directory = "./mix_dataset"
+    
     # 读取所有文件
     files = read_files_from_directory(input_directory)
-
-    print(files[:10])  # 打印前10个文件路径
-
-    sorter(files)
-    res = sorter(files)
-    if res:
-        print("分类完成！")
-
-
-        # 创建类别目录
-        # category_dir = os.path.join(output_directory, category)
-        # os.makedirs(category_dir, exist_ok=True)
-
-        # # 移动文件到对应类别目录
-        # dest_path = os.path.join(category_dir, os.path.basename(file_path))
-        # os.rename(file_path, dest_path)
-        # print(f"已将文件 {file_path} 移动到 {dest_path}")
+    print(f"找到 {len(files)} 个文件")
+    
+    if files:
+        print("前10个文件:")
+        for i, f in enumerate(files[:10]):
+            print(f"  {i+1}. {f}")
+        
+        # 开始分类
+        result = sorter(files)
+        if result:
+            print("分类操作完成")
+        else:
+            print("分类操作失败")
+    else:
+        print("没有找到文件")
