@@ -4,8 +4,8 @@ import librosa
 import matplotlib.pyplot as plt
 from skimage.filters import threshold_otsu
 from skimage.transform import resize
-from datasets import load_dataset
 from tqdm import tqdm
+import glob
 
 def create_binary_spectrogram(audio_file, output_file=None, show_plot=False):
     """
@@ -44,76 +44,59 @@ def create_binary_spectrogram(audio_file, output_file=None, show_plot=False):
     # 将布尔值转换为0和1
     binary_spectrogram_resized = binary_spectrogram_resized.astype(np.uint8)
     frequencyPeaks = np.reshape(binary_spectrogram_resized, (4096,))
-    print(f"图像以4096位向量来进行表示: {frequencyPeaks}")
-    
-    # # 创建图像
-    # plt.figure(figsize=(12, 3), facecolor='black')
-    # plt.imshow(binary_spectrogram_resized, cmap='binary', aspect='auto', 
-    #            interpolation='nearest')
-    # plt.axis('off')  # 隐藏坐标轴
-    
-    # # 设置黑色背景
-    # plt.gca().set_facecolor('black')
-    
-    # # 保存图像
-    # if output_file:
-    #     plt.savefig(output_file, bbox_inches='tight', pad_inches=0, 
-    #                 facecolor='black', dpi=100)
-    #     print(f"指纹图像已保存为: {output_file}")
-    
-    # plt.tight_layout()
-    
-    # if show_plot:
-    #     plt.show()
-    # else:
-    #     plt.close()  # 不显示则关闭图形
+    print(f"处理文件 {audio_file}: 4096位向量生成完成")
     
     return frequencyPeaks
 
-if __name__ == "__main__":
-    # 方法1：直接使用Hugging Face API加载音频
-    cache_dir = "./cache"
-    # os.makedirs(cache_dir, exist_ok=True)
-    # os.makedirs("./binary_pictures", exist_ok=True)
-
-    print("正在从Hugging Face加载数据集...")
-    dataset = load_dataset("danavery/urbansound8K", cache_dir=cache_dir)
+def process_wav_files(audio_dir, output_file="audio/binary_array_dict.npy"):
+    """
+    处理指定目录下的所有WAV文件
     
-    index = 0
+    参数:
+        audio_dir: 包含WAV文件的目录路径
+        output_file: 输出的numpy文件名
+    """
+    # 查找所有WAV文件
+    wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
+    wav_files.extend(glob.glob(os.path.join(audio_dir, "*.WAV")))
+    
+    if not wav_files:
+        print(f"在目录 {audio_dir} 中没有找到WAV文件")
+        return
+    
+    print(f"找到 {len(wav_files)} 个WAV文件")
+    
     binary_array_dict = {}
-    for i in tqdm(dataset['train'] , desc="处理音频数据集"):
-        # 获取第一个音频样本并处理
-        audio_sample = i['audio']
-        y = audio_sample['array']
-        sr = audio_sample['sampling_rate']
-        
-        # 保存为临时文件处理或修改create_binary_spectrogram函数接受数组
-        temp_file = "temp_audio.wav"
-        import soundfile as sf
-        sf.write(temp_file, y, sr)
-        
-        output_path = f"./binary_pictures/fingerprint_{index}_from_dataset.png"
-        binary_spec = create_binary_spectrogram(temp_file, output_file = None , show_plot=False)
-        # 将二值化频谱图添加到字典中
-        binary_array_dict[index] = binary_spec
-        index += 1
-        print(f"处理完成: {output_path}")
-        # 清理临时文件
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
-    print(f"binary_array_dict: {binary_array_dict}")
-    #保存
-    np.save("binary_array_dict.npy", binary_array_dict)
-    print("音频处理完成且对应的4096位向量也成功保存到文件中!")
+    
+    for index, wav_file in enumerate(tqdm(wav_files, desc="处理WAV文件")):
+        try:
+            # 直接处理WAV文件，无需临时文件
+            binary_spec = create_binary_spectrogram(wav_file, output_file=None, show_plot=False)
+            
+            # 使用文件名作为键，或者使用索引
+            filename = os.path.basename(wav_file)
+            binary_array_dict[filename] = binary_spec
+            # 或者使用索引: binary_array_dict[index] = binary_spec
+            
+        except Exception as e:
+            print(f"处理文件 {wav_file} 时出错: {e}")
+            continue
+    
+    print(f"成功处理了 {len(binary_array_dict)} 个文件")
+    
+    # 保存结果
+    np.save(output_file, binary_array_dict)
+    print(f"音频指纹向量已保存到: {output_file}")
+    
+    return binary_array_dict
 
-    # # 测试4096位向量的形式
-    # audio_sample = dataset['train'][1]['audio']
-    # y = audio_sample['array']
-    # sr = audio_sample['sampling_rate']
-    # temp_file = "temp_audio.wav"
-    # import soundfile as sf
-    # sf.write(temp_file, y, sr)
-    # binary_spec = create_binary_spectrogram(temp_file,output_file=None, show_plot=False)
-    # # 清理临时文件
-    # if os.path.exists(temp_file):
-    #     os.remove(temp_file)
+if __name__ == "__main__":
+    # 指定包含WAV文件的目录
+    audio_directory = "./audio/dataset"  # 修改为你的WAV文件目录
+    
+    # 处理WAV文件
+    result = process_wav_files(audio_directory)
+    
+    if result:
+        print("处理完成!")
+        print(f"生成的指纹字典包含 {len(result)} 个音频文件")

@@ -18,3 +18,5 @@ mix_dataset
 *.csv
 *.json
 *.wav
+*.pyc
+*.npy

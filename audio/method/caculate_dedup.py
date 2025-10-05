@@ -4,6 +4,7 @@ import random
 from collections import defaultdict
 from datasets import load_dataset
 import json
+import glob
 
 # 先将SIMILAR_PAIRS.TXT加载到内存中
 def load_similar_pairs(file_path,threshold=0.83):
@@ -137,6 +138,51 @@ def extract_file_name(dataset_name, output_dir, remove_files):
     print(f"保留文件数: {kept_count}")
     print(f"总文件数: {len(keep_files_data['kept_files'])}")
     print(f"JSON文件已保存到: {json_file_path}")
+
+def extract_local_file_info(wav_dir, output_file, remove_files):
+    """
+    从本地WAV文件目录中提取要删除的文件信息
+    
+    参数:
+        wav_dir: 本地WAV文件目录路径
+        output_file: 输出文件路径
+        remove_files: 要删除的文件列表
+    """
+    # 获取所有WAV文件
+    wav_files = glob.glob(os.path.join(wav_dir, "*.wav"))
+    wav_files.extend(glob.glob(os.path.join(wav_dir, "*.WAV")))
+    
+    # 创建文件名到路径的映射
+    filename_to_path = {}
+    for wav_file in wav_files:
+        filename = os.path.basename(wav_file)
+        filename_to_path[filename] = wav_file
+    
+    # 提取要删除的文件信息
+    files_to_remove = []
+    for file_id in remove_files:
+        if file_id in filename_to_path:
+            file_path = filename_to_path[file_id]
+            file_size = os.path.getsize(file_path)
+            files_to_remove.append({
+                'filename': file_id,
+                'path': file_path,
+                'size_mb': file_size / (1024 * 1024)
+            })
+    
+    # 保存结果
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(f"本次去重将删除 {len(files_to_remove)} 个文件\n")
+        f.write(f"总大小: {sum(item['size_mb'] for item in files_to_remove):.2f} MB\n\n")
+        
+        for item in files_to_remove:
+            f.write(f"文件名: {item['filename']}\n")
+            f.write(f"路径: {item['path']}\n")
+            f.write(f"大小: {item['size_mb']:.2f} MB\n")
+            f.write("-" * 50 + "\n")
+    
+    print(f"文件信息已保存到: {output_file}")
+    return files_to_remove
 
 if __name__ == "__main__":
     # 主程序执行
