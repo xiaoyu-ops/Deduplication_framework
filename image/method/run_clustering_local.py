@@ -18,17 +18,55 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
 
-# 配置文件路径
-config_file = "configs/openclip/clustering_configs.yaml"
-logger.info(f"加载配置文件: {config_file}")
+# 获取当前目录
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 检查文件是否存在
-if not os.path.exists(config_file):
-    logger.error(f"配置文件不存在: {config_file}")
+# 配置文件路径 - 修复路径问题
+possible_config_paths = [
+    os.path.join(current_dir, "configs", "openclip", "clustering_configs.yaml"),
+    os.path.join(current_dir, "clustering", "configs", "openclip", "clustering_configs.yaml"),
+    "configs/openclip/clustering_configs.yaml",
+    "clustering/configs/openclip/clustering_configs.yaml"
+]
+
+config_file = None
+for path in possible_config_paths:
+    if os.path.exists(path):
+        config_file = path
+        break
+
+if config_file is None:
+    logger.error("找不到配置文件 clustering_configs.yaml")
     logger.info(f"当前工作目录: {os.getcwd()}")
-    available_files = os.listdir("clustering/configs/openclip") if os.path.exists("clustering/configs/openclip") else []
-    logger.info(f"可用配置文件: {available_files}")
-    exit(1)
+    logger.info(f"尝试查找的路径: {possible_config_paths}")
+    
+    # 尝试创建默认配置
+    default_config_dir = os.path.join(current_dir, "configs", "openclip")
+    os.makedirs(default_config_dir, exist_ok=True)
+    config_file = os.path.join(default_config_dir, "clustering_configs.yaml")
+    
+    # 创建默认配置文件
+    default_config = {
+        'seed': 42,
+        'emb_memory_loc': os.path.join(current_dir, 'embeddings', 'image_embeddings.npy'),
+        'paths_memory_loc': os.path.join(current_dir, 'embeddings', 'image_paths.npy'),
+        'dataset_size': 10000,  # 这个需要根据实际情况调整
+        'emb_size': 512,
+        'path_str_dtype': 'U200',
+        'ncentroids': 1000,
+        'niter': 20,
+        'Kmeans_with_cos_dist': True,
+        'save_folder': os.path.join(current_dir, 'clustering_results'),
+        'sorted_clusters_file_loc': os.path.join(current_dir, 'sorted_clusters')
+    }
+    
+    with open(config_file, 'w', encoding='utf-8') as f:
+        yaml.dump(default_config, f, default_flow_style=False)
+    
+    logger.info(f"创建了默认配置文件: {config_file}")
+    logger.warning("请检查并修改配置文件中的参数，特别是dataset_size")
+
+logger.info(f"加载配置文件: {config_file}")
 
 # 加载聚类参数
 with open(config_file, 'r', encoding='utf-8') as y_file:
