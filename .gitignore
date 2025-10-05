@@ -20,3 +20,5 @@ mix_dataset
 *.wav
 *.pyc
 *.npy
+*.txt
+audio/test.py

@@ -103,8 +103,23 @@ if __name__ == "__main__":
     # 创建输出目录
     output_dir = os.path.join(os.path.dirname(__file__), "similar_pairs")
     os.makedirs(output_dir, exist_ok=True)
+    
+    # 改回原来的设置，保存到 method 目录下的 dedup_results
     output_dir_dedup = os.path.join(os.path.dirname(__file__), "dedup_results")
-    os.makedirs(output_dir_dedup, exist_ok=True)  # 修正：创建去重结果目录    
+    
+    # 确保目录存在并有写权限
+    try:
+        os.makedirs(output_dir_dedup, exist_ok=True)
+        # 测试写权限
+        test_file = os.path.join(output_dir_dedup, "test_write.tmp")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        print(f"去重结果将保存到: {output_dir_dedup}")
+    except Exception as e:
+        print(f"无法在指定目录创建文件: {e}")
+        print("请检查目录权限或以管理员身份运行")
+        sys.exit(1)
 
     #生成音频指纹数据
 

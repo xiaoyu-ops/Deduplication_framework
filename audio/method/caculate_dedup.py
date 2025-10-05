@@ -142,47 +142,149 @@ def extract_file_name(dataset_name, output_dir, remove_files):
 def extract_local_file_info(wav_dir, output_file, remove_files):
     """
     从本地WAV文件目录中提取要删除的文件信息
-    
-    参数:
-        wav_dir: 本地WAV文件目录路径
-        output_file: 输出文件路径
-        remove_files: 要删除的文件列表
     """
-    # 获取所有WAV文件
-    wav_files = glob.glob(os.path.join(wav_dir, "*.wav"))
-    wav_files.extend(glob.glob(os.path.join(wav_dir, "*.WAV")))
+    import glob
     
-    # 创建文件名到路径的映射
-    filename_to_path = {}
-    for wav_file in wav_files:
-        filename = os.path.basename(wav_file)
-        filename_to_path[filename] = wav_file
-    
-    # 提取要删除的文件信息
-    files_to_remove = []
-    for file_id in remove_files:
-        if file_id in filename_to_path:
-            file_path = filename_to_path[file_id]
-            file_size = os.path.getsize(file_path)
-            files_to_remove.append({
-                'filename': file_id,
-                'path': file_path,
-                'size_mb': file_size / (1024 * 1024)
-            })
-    
-    # 保存结果
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(f"本次去重将删除 {len(files_to_remove)} 个文件\n")
-        f.write(f"总大小: {sum(item['size_mb'] for item in files_to_remove):.2f} MB\n\n")
+    try:
+        # 修复：获取所有WAV文件并排序，避免重复计算
+        wav_files = glob.glob(os.path.join(wav_dir, "*.wav"))
+        # 注释
+        # wav_files.extend(glob.glob(os.path.join(wav_dir, "*.WAV")))
         
+        wav_files.sort()  # 确保排序一致
+        
+        print(f"找到 {len(wav_files)} 个WAV文件")
+        print(f"前5个文件: {[os.path.basename(f) for f in wav_files[:5]]}")
+        
+        # 创建索引到文件的直接映射
+        index_to_file = {}
+        
+        for i, wav_file in enumerate(wav_files):
+            filename = os.path.basename(wav_file)
+            
+            # 直接索引映射（按列表顺序）
+            index_to_file[i] = wav_file
+            index_to_file[str(i)] = wav_file
+            
+            # 如果是 audio_0000.wav 格式，提取数字索引
+            if filename.startswith('audio_') and filename.endswith('.wav'):
+                try:
+                    # 提取 audio_0000.wav 中的 0000 部分
+                    number_str = filename[6:-4]  # 去掉 "audio_" 和 ".wav"
+                    if number_str.isdigit():
+                        file_index = int(number_str)
+                        index_to_file[file_index] = wav_file
+                        index_to_file[str(file_index)] = wav_file
+                        index_to_file[number_str] = wav_file
+                        
+                except (ValueError, IndexError):
+                    pass
+        
+        print(f"创建了 {len(index_to_file)} 个索引映射")
+        print(f"要删除的文件索引数量: {len(remove_files)}")
+        
+        # 提取要删除的文件信息
+        files_to_remove = []
+        not_found_files = []
+        
+        for file_id in remove_files:
+            matched_path = None
+            
+            # 尝试多种索引格式
+            search_keys = [
+                file_id,           # 原始值
+                str(file_id),      # 字符串形式
+                int(file_id) if str(file_id).isdigit() else None,  # 整数形式
+            ]
+            
+            # 去除None值
+            search_keys = [k for k in search_keys if k is not None]
+            
+            for key in search_keys:
+                if key in index_to_file:
+                    matched_path = index_to_file[key]
+                    break
+            
+            if matched_path:
+                try:
+                    file_size = os.path.getsize(matched_path)
+                    files_to_remove.append({
+                        'filename': os.path.basename(matched_path),
+                        'path': matched_path,
+                        'size_mb': file_size / (1024 * 1024),
+                        'index': file_id
+                    })
+                except OSError as e:
+                    print(f"无法获取文件大小: {matched_path}, 错误: {e}")
+            else:
+                not_found_files.append(file_id)
+        
+        print(f"匹配成功: {len(files_to_remove)} 个文件")
+        print(f"未找到: {len(not_found_files)} 个文件")
+        
+        # 计算保留的文件
+        all_indices = set(range(len(wav_files)))
+        remove_indices = set(int(str(f)) for f in remove_files if str(f).isdigit() and int(str(f)) < len(wav_files))
+        keep_indices = sorted(list(all_indices - remove_indices))
+        
+        # 准备内容
+        content = f"=== 音频去重结果详细报告 ===\n\n"
+        content += f"总文件数: {len(wav_files)}\n"
+        content += f"要删除文件数: {len(files_to_remove)}\n"
+        content += f"保留文件数: {len(keep_indices)}\n"
+        content += f"删除总大小: {sum(item['size_mb'] for item in files_to_remove):.2f} MB\n\n"
+        
+        content += "=== 要删除的文件列表 ===\n"
         for item in files_to_remove:
-            f.write(f"文件名: {item['filename']}\n")
-            f.write(f"路径: {item['path']}\n")
-            f.write(f"大小: {item['size_mb']:.2f} MB\n")
-            f.write("-" * 50 + "\n")
-    
-    print(f"文件信息已保存到: {output_file}")
-    return files_to_remove
+            content += f"索引: {item['index']:4} | 文件名: {item['filename']} | 大小: {item['size_mb']:.2f} MB\n"
+        
+        content += f"\n=== 保留的文件索引 ({len(keep_indices)} 个) ===\n"
+        # 每行显示10个索引
+        for i in range(0, len(keep_indices), 10):
+            line_indices = keep_indices[i:i+10]
+            content += " ".join(f"{idx:4d}" for idx in line_indices) + "\n"
+        
+        if not_found_files:
+            content += f"\n=== 未匹配的索引 ({len(not_found_files)} 个) ===\n"
+            for i in range(0, min(len(not_found_files), 50), 10):  # 最多显示50个
+                line_indices = not_found_files[i:i+10]
+                content += " ".join(str(idx) for idx in line_indices) + "\n"
+        
+        # 直接保存到指定位置（权限问题已解决）
+        try:
+            # 确保目录存在
+            output_dir = os.path.dirname(output_file)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"详细报告已保存到: {output_file}")
+            
+            # 同时生成保留文件列表
+            keep_file = output_file.replace('.txt', '_keep_files.txt')
+            with open(keep_file, 'w', encoding='utf-8') as f:
+                f.write("=== 去重后保留的文件索引 ===\n\n")
+                for idx in keep_indices:
+                    if idx < len(wav_files):
+                        filename = os.path.basename(wav_files[idx])
+                        f.write(f"{idx:4d} : {filename}\n")
+            print(f"保留文件列表已保存到: {keep_file}")
+            
+        except Exception as e:
+            print(f"保存失败: {e}")
+            print("详细报告显示在控制台:")
+            print("=" * 60)
+            print(content[:2000] + "..." if len(content) > 2000 else content)
+            print("=" * 60)
+        
+        return files_to_remove
+        
+    except Exception as e:
+        print(f"extract_local_file_info执行失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 if __name__ == "__main__":
     # 主程序执行

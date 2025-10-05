@@ -58,7 +58,6 @@ def process_wav_files(audio_dir, output_file="audio/binary_array_dict.npy"):
     """
     # 查找所有WAV文件
     wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
-    wav_files.extend(glob.glob(os.path.join(audio_dir, "*.WAV")))
     
     if not wav_files:
         print(f"在目录 {audio_dir} 中没有找到WAV文件")
