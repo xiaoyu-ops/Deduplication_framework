@@ -22,3 +22,9 @@ mix_dataset
 *.npy
 *.txt
 audio/test.py
+*.pkl
+*.jpg
+*.jpeg
+*.png
+*.arrow
+*.pickle

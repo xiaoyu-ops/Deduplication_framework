@@ -10,7 +10,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datasets import load_dataset, Dataset, DatasetDict, concatenate_datasets
 from tqdm import tqdm
-from text.method.dataset.jaccard_deduplication import (
+from jaccard_deduplication import (
     deduplicate_dataset_jaccard, 
     deduplicate_cross_splits_jaccard,
     quick_jaccard_deduplicate,
@@ -18,6 +18,17 @@ from text.method.dataset.jaccard_deduplication import (
     get_ngrams,
     normalize_text
 )
+import sys
+current_dir = os.path.dirname(os.path.abspath(__file__)) #os.path.dirname(__file__)当前文件的绝对路径 然后dirname取目录
+parent_dir = os.path.dirname(current_dir)
+root_dir = os.path.dirname(parent_dir)  # 添加这行，获取根目录
+
+# 将根目录添加到Python路径（这样可以导入env_manager包）
+sys.path.insert(0, root_dir)
+print(f"已添加根目录到路径: {root_dir}")
+
+# 现在可以用完整包路径导入
+from env_manager.manager import EnvManager
 
 # 全局函数用于支持multiprocessing
 def process_chunk_worker(chunk_data): # 将大数据集分成多个小块，每个块再独立的进程中处理。
@@ -26,7 +37,7 @@ def process_chunk_worker(chunk_data): # 将大数据集分成多个小块，每�
     必须在模块级别定义以支持pickle序列化
     """
     try:
-        from text.method.dataset.jaccard_deduplication import jaccard_similarity, normalize_text, get_ngrams
+        from jaccard_deduplication import jaccard_similarity, normalize_text, get_ngrams
         from datasets import Dataset
         
         text_field, threshold, ngram_size = chunk_data['params']
@@ -187,6 +198,82 @@ def process_chunk_worker(chunk_data): # 将大数据集分成多个小块，每�
         print(f"块 {chunk_id} 处理失败: {str(e)}")
         import traceback
         print(f"块 {chunk_id} 错误详情: {traceback.format_exc()}")
+        return None
+
+def load_local_dataset(file_path, text_field='text'):
+    """从本地文件加载数据集"""
+    from datasets import Dataset
+    import json
+    import pandas as pd
+    import os
+    
+    if not os.path.exists(file_path):
+        print(f"错误: 文件不存在 - {file_path}")
+        return None
+    
+    try:
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
+        if file_ext == '.json':
+            print(f"正在加载JSON文件: {file_path}")
+            
+            # 尝试不同的JSON格式
+            try:
+                # 尝试加载行式JSON (每行一个JSON对象)
+                dataset = Dataset.from_json(file_path)
+                print(f"成功以行式JSON格式加载")
+                return dataset
+            except Exception as e:
+                print(f"行式JSON加载失败，尝试标准JSON格式: {e}")
+                
+                try:
+                    # 尝试加载标准JSON (整个文件是一个JSON对象/数组)
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # 处理不同的JSON结构
+                    if isinstance(data, list):
+                        dataset = Dataset.from_list(data)
+                        print(f"成功加载JSON数组，包含{len(dataset)}条记录")
+                    elif isinstance(data, dict):
+                        # 检查是否有数据字段
+                        if 'data' in data and isinstance(data['data'], list):
+                            dataset = Dataset.from_list(data['data'])
+                            print(f"成功加载带data字段的JSON，包含{len(dataset)}条记录")
+                        else:
+                            # 将单个字典转换为列表
+                            dataset = Dataset.from_list([data])
+                            print("成功加载单个JSON对象")
+                    else:
+                        print(f"不支持的JSON格式")
+                        return None
+                        
+                    return dataset
+                except Exception as e2:
+                    print(f"JSON加载失败: {e2}")
+                    return None
+        
+        elif file_ext == '.csv':
+            print(f"正在加载CSV文件: {file_path}")
+            df = pd.read_csv(file_path)
+            dataset = Dataset.from_pandas(df)
+            print(f"成功加载CSV，包含{len(dataset)}条记录")
+            return dataset
+            
+        elif file_ext == '.parquet':
+            print(f"正在加载Parquet文件: {file_path}")
+            dataset = Dataset.from_parquet(file_path)
+            print(f"成功加载Parquet，包含{len(dataset)}条记录")
+            return dataset
+        
+        else:
+            print(f"不支持的文件格式: {file_ext}")
+            return None
+            
+    except Exception as e:
+        print(f"加载本地数据集失败: {e}")
+        import traceback
+        print(f"错误详情: {traceback.format_exc()}")
         return None
 
 class DatasetCleaner:
@@ -761,9 +848,10 @@ def interactive_cleaning():
     print("3. IMDB电影评论数据集")
     print("4. Go Emotions情感数据集 (简化版)")
     print("5. Go Emotions情感数据集 (原始版)")
-    print("6. 自定义数据集 (输入名称)")
+    print("6. 自定义数据集 (Hugging Face)")
+    print("7. 本地数据集文件 (JSON/CSV/Parquet)")
     
-    choice = input("请选择 (1/2/3/4/5/6): ").strip()
+    choice = input("请选择 (1-7): ").strip()
     
     if choice == '1':
         dataset_name = "ag_news"
@@ -804,6 +892,65 @@ def interactive_cleaning():
             dataset_config = None
             
         text_field = input("请输入文本字段名 (默认'text'): ").strip() or 'text'
+        
+        # 设置加载模式为Hugging Face
+        load_mode = 'huggingface'
+    elif choice == '7':
+        # 本地数据集文件
+        print("\n本地数据集加载")
+        print("-" * 40)
+        
+        # 默认目录
+        default_dir = r"D:\桌面\Deduplication_framework\text\dataset"
+        print(f"默认数据集目录: {default_dir}")
+        
+        # 询问文件路径
+        use_default = input("使用默认目录? (y/n, 默认y): ").strip().lower() != 'n'
+        
+        if use_default:
+            # 列出默认目录中的文件
+            import os
+            try:
+                files = [f for f in os.listdir(default_dir) 
+                         if os.path.isfile(os.path.join(default_dir, f)) and 
+                         f.endswith(('.json', '.csv', '.parquet'))]
+                
+                if files:
+                    print("\n可用数据集文件:")
+                    for i, file in enumerate(files, 1):
+                        print(f"{i}. {file}")
+                    
+                    file_choice = input("请选择文件编号 (或输入完整文件名): ").strip()
+                    
+                    try:
+                        file_idx = int(file_choice) - 1
+                        if 0 <= file_idx < len(files):
+                            file_path = os.path.join(default_dir, files[file_idx])
+                        else:
+                            print("无效的文件编号，请输入文件路径")
+                            file_path = input("请输入文件完整路径: ").strip()
+                    except ValueError:
+                        # 用户输入了文件名而不是编号
+                        if file_choice in files:
+                            file_path = os.path.join(default_dir, file_choice)
+                        else:
+                            file_path = input("未找到文件，请输入完整路径: ").strip()
+                else:
+                    print(f"默认目录中没有找到JSON/CSV/Parquet文件")
+                    file_path = input("请输入文件完整路径: ").strip()
+            except Exception as e:
+                print(f"读取默认目录失败: {e}")
+                file_path = input("请输入文件完整路径: ").strip()
+        else:
+            file_path = input("请输入文件完整路径: ").strip()
+        
+        # 文本字段
+        text_field = input("请输入文本字段名 (默认'text'): ").strip() or 'text'
+        
+        # 设置加载模式为本地文件
+        load_mode = 'local'
+        dataset_name = file_path
+        dataset_config = None
     else:
         print("无效选择")
         return
@@ -820,7 +967,15 @@ def interactive_cleaning():
     
     # 设置输出路径
     print(f"\n保存文件设置:")
-    default_output = f"ag_news_threshold_{threshold}.json"  # 直接保存在当前目录
+    
+    # 根据数据集类型生成默认输出文件名
+    if choice == '7':  # 本地文件
+        import os
+        base_filename = os.path.splitext(os.path.basename(file_path))[0]
+        default_output = f"{base_filename}_clean_t{threshold}.json"
+    else:  # Hugging Face数据集
+        default_output = f"{dataset_name.split('/')[-1]}_clean_t{threshold}.json"
+    
     output_path = input(f"输出文件路径 (默认'{default_output}'): ").strip() or default_output
     
     # 确保输出目录存在
@@ -858,41 +1013,60 @@ def interactive_cleaning():
         enable_prefilter=enable_prefilter
     )
     
-    # 加载数据集 - 添加重试机制
-    dataset = None
-    retry_count = 0
-    max_retries = 3
-    
-    while dataset is None and retry_count < max_retries:
-        dataset = cleaner.load_dataset_safe(dataset_name, config=dataset_config)
+    # 加载数据集
+    if choice == '7' or load_mode == 'local':
+        print(f"\n正在加载本地数据集: {dataset_name}")
+        dataset = load_local_dataset(dataset_name, text_field)
+    else:
+        # 使用Hugging Face加载
+        dataset = None
+        retry_count = 0
+        max_retries = 3
         
-        if dataset is None:
-            retry_count += 1
-            if retry_count < max_retries:
-                print(f"\n加载失败，第 {retry_count}/{max_retries} 次重试")
-                print("请检查数据集名称和配置是否正确")
-                
-                # 询问是否修改参数
-                modify = input("是否修改数据集参数? (y/n): ").strip().lower() == 'y'
-                if modify:
-                    new_dataset_name = input(f"数据集名称 (当前: {dataset_name}): ").strip()
-                    if new_dataset_name:
-                        dataset_name = new_dataset_name
+        while dataset is None and retry_count < max_retries:
+            dataset = cleaner.load_dataset_safe(dataset_name, config=dataset_config)
+            
+            if dataset is None:
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"\n加载失败，第 {retry_count}/{max_retries} 次重试")
+                    print("请检查数据集名称和配置是否正确")
                     
-                    if dataset_config:
-                        new_config = input(f"配置名称 (当前: {dataset_config}, 留空表示无配置): ").strip()
-                        dataset_config = new_config if new_config else None
+                    # 询问是否修改参数或尝试本地文件
+                    action = input("1. 修改参数  2. 尝试加载本地文件  3. 退出  选择(1/2/3): ").strip()
+                    
+                    if action == '1':
+                        new_dataset_name = input(f"数据集名称 (当前: {dataset_name}): ").strip()
+                        if new_dataset_name:
+                            dataset_name = new_dataset_name
+                        
+                        if dataset_config:
+                            new_config = input(f"配置名称 (当前: {dataset_config}, 留空表示无配置): ").strip()
+                            dataset_config = new_config if new_config else None
+                        else:
+                            has_config = input("是否添加配置参数? (y/n): ").strip().lower() == 'y'
+                            if has_config:
+                                dataset_config = input("请输入配置名称: ").strip()
+                    
+                    elif action == '2':
+                        # 切换到本地文件加载
+                        print("\n尝试加载本地文件...")
+                        file_path = input("请输入本地文件路径: ").strip()
+                        dataset = load_local_dataset(file_path, text_field)
+                        break
                     else:
-                        has_config = input("是否添加配置参数? (y/n): ").strip().lower() == 'y'
-                        if has_config:
-                            dataset_config = input("请输入配置名称: ").strip()
-                
-                print(f"重新尝试加载: {dataset_name}" + (f" (配置: {dataset_config})" if dataset_config else ""))
-            else:
-                print("达到最大重试次数，加载失败")
-                return
+                        print("退出程序")
+                        return
+                else:
+                    print("达到最大重试次数，尝试加载本地文件...")
+                    file_path = input("请输入本地文件路径 (直接回车退出): ").strip()
+                    if file_path:
+                        dataset = load_local_dataset(file_path, text_field)
+                    else:
+                        return
     
     if dataset is None:
+        print("数据集加载失败，程序退出")
         return
     
     # 分析数据集
@@ -1028,30 +1202,35 @@ def batch_cleaning_example():
 
 if __name__ == "__main__":
     # Windows系统需要这个保护以避免multiprocessing问题
-    mp.set_start_method('spawn', force=True) # windows需要
-    
-    print("数据集清理工具")
-    print("基于Jaccard相似度算法的智能去重")
-    print("=" * 60)
-    
-    print("\n选择运行模式:")
-    print("1. 交互式清理")
-    print("2. 批量清理示例")
-    print("3. 查看数据集配置信息")
-    
-    mode = input("请选择 (1/2/3): ").strip()
-    
-    if mode == '1':
-        interactive_cleaning()
-    elif mode == '2':
-        batch_cleaning_example()
-    elif mode == '3':
-        show_dataset_info()
-        print("\n")
-        # 显示完信息后继续选择
-        choice = input("是否继续运行交互式清理? (y/n): ").strip().lower()
-        if choice == 'y':
+    switcher = EnvManager()
+    res = switcher.setup_text_env()
+    if res:
+        mp.set_start_method('spawn', force=True) # windows需要
+        
+        print("数据集清理工具")
+        print("基于Jaccard相似度算法的智能去重")
+        print("=" * 60)
+        
+        print("\n选择运行模式:")
+        print("1. 交互式清理")
+        print("2. 批量清理示例")
+        print("3. 查看数据集配置信息")
+        
+        mode = input("请选择 (1/2/3): ").strip()
+        
+        if mode == '1':
+            interactive_cleaning()
+        elif mode == '2':
+            batch_cleaning_example()
+        elif mode == '3':
+            show_dataset_info()
+            print("\n")
+            # 显示完信息后继续选择
+            choice = input("是否继续运行交互式清理? (y/n): ").strip().lower()
+            if choice == 'y':
+                interactive_cleaning()
+        else:
+            print("无效选择，运行交互式清理...")
             interactive_cleaning()
     else:
-        print("无效选择，运行交互式清理...")
-        interactive_cleaning()
+        print("环境初始化失败，程序退出")

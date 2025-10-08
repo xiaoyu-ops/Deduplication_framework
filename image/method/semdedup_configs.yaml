@@ -1,0 +1,20 @@
+
+save_folder: "D:\\桌面\\Deduplication_framework\\image\\clustering\\semdedup_result"
+sorted_clusters_path: "D:\\桌面\\Deduplication_framework\\image\\clustering\\results\\ncentroids_2000\\sorted_clusters"
+# -- number of clusters
+# --簇的数量
+num_clusters: 200
+embs_memory_loc: "D:\\桌面\\Deduplication_framework\\embeddings\\image_embeddings_converted.npy"
+# -- dataset size
+dataset_size: 10000
+# -- embeddings size
+emd_size: 512
+# -- which example to keep from each group of duplicates
+# -- 从每个重复组中保留哪个示例
+which_to_keep: "hard"
+# -- seed
+seed: 1234
+# -- largest cluster size the memory is large enough to process. If the cluster size is larger than it, we will devide the cluster into small clusters and process each one separately.
+# -- 内存足够大以处理的最大簇大小。 如果簇大小大于它，我们将把簇分成小簇，并分别处理每个簇。
+largest_cluster_size_to_process: 10000000
+

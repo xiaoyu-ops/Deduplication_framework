@@ -21,14 +21,41 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=30, help='批处理大小')
     return parser.parse_args()
 
-def init_memmap_embs(embs_memory_loc, dataset_size, emd_size=512, dtype="float32"):
-    """初始化内存映射的嵌入数组"""
-    print(f"加载嵌入数据: {embs_memory_loc}")
-    print(f"数据集大小: {dataset_size}, 嵌入维度: {emd_size}")
-    embs = np.memmap(
-        embs_memory_loc, dtype=dtype, mode="r", shape=(dataset_size, emd_size)
-    )
-    return embs
+def init_memmap_embs(embs_memory_loc, dataset_size=None, emd_size=512, dtype="float32"):
+    """安全初始化嵌入内存映射：
+       - 优先使用 np.load(..., mmap_mode='r')
+       - 失败时按 raw 二进制用 np.memmap（根据文件大小和 emd_size 推断 N）
+       - 返回可索引的数组/ memmap
+    """
+    if not os.path.exists(embs_memory_loc):
+        raise FileNotFoundError(f"嵌入文件不存在: {embs_memory_loc}")
+
+    # 1) 尝试以 numpy 格式（带 header）的 mmap 加载（不占用全部内存）
+    try:
+        arr = np.load(embs_memory_loc, mmap_mode='r')
+        # 如果维度不符合预期，记录警告但仍返回
+        if arr.ndim != 2 or arr.shape[1] != emd_size:
+            print(f"警告: 加载的嵌入 shape={getattr(arr,'shape',None)} 与期望 emd_size={emd_size} 不一致")
+        return arr
+    except Exception as e:
+        print(f"np.load mmap 加载失败(可能不是标准 .npy){e}")
+
+    # 2) 尝试按 raw 二进制 (fromfile/memmap) 加载（假设 float32）
+    try:
+        bpp = np.dtype(dtype).itemsize
+        filesize = os.path.getsize(embs_memory_loc)
+        if emd_size <= 0:
+            raise RuntimeError("emd_size 必须为正整数")
+        if filesize % (bpp * emd_size) != 0:
+            raise RuntimeError(f"文件大小 {filesize} 不能被 (dtype bytes {bpp} * emd_size {emd_size}) 整除，无法按 raw reshape")
+        inferred_N = filesize // (bpp * emd_size)
+        if dataset_size and dataset_size != inferred_N:
+            print(f"警告: 配置 dataset_size={dataset_size} 与文件推断 N={inferred_N} 不一致，采用推断值")
+        print(f"按 raw {dtype} memmap 加载: shape=({inferred_N},{emd_size})")
+        mem = np.memmap(embs_memory_loc, dtype=dtype, mode='r', shape=(inferred_N, emd_size))
+        return mem
+    except Exception as e:
+        raise RuntimeError(f"无法以安全方式加载嵌入文件: {e}\n建议：用 numpy.lib.format.open_memmap 或 np.save 将嵌入写为标准 .npy，然后重试。")
 
 def load_cluster_file(cluster_path):
     """加载簇文件，支持多种格式"""
@@ -269,7 +296,8 @@ def run_semdedup(config, args):
         
         # 处理每个簇的结果
         for cluster_idx in tqdm(range(num_clusters)):
-            df_file_loc = os.path.join(save_loc, f"dataframes/cluster_{cluster_idx}.pkl")
+            # 处理结果保存在 "<save_folder>/dataframes/cluster_{id}.pkl"
+            df_file_loc = os.path.join(save_loc, "dataframes", f"cluster_{cluster_idx}.pkl")
             
             if not os.path.exists(df_file_loc):
                 continue

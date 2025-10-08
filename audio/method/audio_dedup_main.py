@@ -8,7 +8,7 @@ import math
 from tqdm import tqdm
 from pathlib import Path
 import soundfile as sf
-
+import json
 
 
 # 添加上级目录到Python路径，这样可以导入method_all模块
@@ -71,11 +71,27 @@ def find_optimal_band_row(target_threshold, signature_length=200):
     
     return (best_b, best_r), best_actual_threshold, min_diff
 
+def load_config_json(config_path):
+    """从 JSON 配置文件加载配置，出错时返回 None"""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"配置文件未找到: {config_path}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"配置文件格式错误: {e}")
+        return None
+
 if __name__ == "__main__":
 
+    # 以下是配置文件地址
+    config_path = os.path.join(current_dir, "audio_config.json")
+    data = load_config_json(config_path)
+    
     # 测试示例 - 使用实际的LSH签名长度
-    targets = [0.7, 0.8, 0.9]
-    signature_length = 200  # 对应现有LSH实现 (b=20, r=10, 总长度=200)
+    targets = data.get("processing", {}).get("target_thresholds", [0.7, 0.8, 0.9])
+    signature_length = data.get("processing", {}).get("signature_length", 200) # 对应现有LSH实现 (b=20, r=10, 总长度=200)
     
     print(f"LSH签名长度: {signature_length}")
     print("目标阈值 -> 推荐参数(b, r) -> 实际阈值 -> 误差")

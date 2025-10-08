@@ -21,6 +21,35 @@ logger.addHandler(handler)
 # 获取当前目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
+# --- 把 load_embeddings_safe 提前定义，保证后续可用 ---
+def load_embeddings_safe(emb_path: str, emb_size: int, expected_N: int = None):
+    """安全加载 embeddings：优先 np.load(..., mmap_mode='r')，失败则按 raw float32 memmap"""
+    if not os.path.exists(emb_path):
+        raise FileNotFoundError(f"嵌入文件不存在: {emb_path}")
+
+    # 优先使用 np.load mmap_mode='r'（不会把全部载入内存）
+    try:
+        arr = np.load(emb_path, mmap_mode='r')
+        logger.info(f"np.load 成功, shape={getattr(arr,'shape',None)}, dtype={getattr(arr,'dtype',None)}")
+        if arr.ndim != 2 or arr.shape[1] != emb_size:
+            logger.warning(f"加载的 shape 与期望 emb_size 不符: {arr.shape} vs emb_size={emb_size}")
+        return arr
+    except Exception as e:
+        logger.warning(f"np.load 失败（可能不是标准 .npy），尝试 raw 二进制读取: {e}")
+
+    # raw 二进制尝试（假设 float32）
+    filesize = os.path.getsize(emb_path)
+    bytes_per_vec = 4 * emb_size  # float32
+    if filesize % bytes_per_vec != 0:
+        raise RuntimeError(f"文件大小({filesize}) 不能被 emb_size({emb_size}) 整除，无法按 float32 reshape。")
+
+    inferred_N = filesize // bytes_per_vec
+    if expected_N and expected_N != inferred_N:
+        logger.warning(f"配置 dataset_size={expected_N} 与文件推断 N={inferred_N} 不一致，采用推断值。")
+    logger.info(f"按 float32 memmap 加载: shape=({inferred_N},{emb_size})")
+    mem = np.memmap(emb_path, dtype=np.float32, mode='r', shape=(inferred_N, emb_size))
+    return mem
+
 # 配置文件路径 - 修复路径问题
 possible_config_paths = [
     os.path.join(current_dir, "configs", "openclip", "clustering_configs.yaml"),
@@ -92,15 +121,44 @@ if not os.path.exists(emb_memory_loc):
     logger.error(f"嵌入向量文件不存在: {emb_memory_loc}")
     exit(1)
 
-# 加载嵌入向量和路径
+# 加载嵌入向量（使用安全加载，不会一次性占用大量内存）
 logger.info(f"加载嵌入向量: {emb_memory_loc}")
 try:
-    emb_memory = np.memmap(emb_memory_loc, dtype='float32', mode='r', shape=(dataset_size, emb_size))
-    paths_memory = np.memmap(paths_memory_loc, dtype=path_str_type, mode='r', shape=(dataset_size,))
-    logger.info(f"成功加载，嵌入向量形状: {emb_memory.shape}")
+    embeddings = load_embeddings_safe(emb_memory_loc, emb_size, dataset_size)
 except Exception as e:
-    logger.error(f"加载数据时出错: {e}")
+    logger.error(f"加载嵌入向量失败: {e}")
     exit(1)
+
+# 根据实际 embeddings 推断 dataset 大小并更新 params
+actual_N = embeddings.shape[0]
+if dataset_size != actual_N:
+    logger.warning(f"配置的 dataset_size={dataset_size} 与文件实际大小 {actual_N} 不一致，已更新为实际值。")
+    dataset_size = actual_N
+    params['dataset_size'] = actual_N
+
+# 加载 paths（按实际 N 尝试 memmap，若失败尝试 np.load）
+paths_memory = None
+if os.path.exists(paths_memory_loc):
+    try:
+        # 尝试用 memmap 按推断的长度读取路径数组
+        paths_memory = np.memmap(paths_memory_loc, dtype=path_str_type, mode='r', shape=(dataset_size,))
+        logger.info(f"成功加载 paths，数量: {paths_memory.shape[0]}")
+    except Exception as e:
+        logger.warning(f"paths memmap 加载失败: {e}，尝试 np.load")
+        try:
+            paths_arr = np.load(paths_memory_loc, mmap_mode='r')
+            # 若长度与 dataset_size 不符，截断或扩展警告
+            if paths_arr.shape[0] != dataset_size:
+                logger.warning(f"paths 长度 {paths_arr.shape[0]} 与 dataset_size {dataset_size} 不一致")
+            paths_memory = paths_arr
+            logger.info("使用 np.load 成功加载 paths")
+        except Exception as e2:
+            logger.error(f"无法加载 paths 文件: {e2}")
+            paths_memory = None
+else:
+    logger.warning(f"未找到 paths 文件: {paths_memory_loc}")
+
+logger.info(f"嵌入向量形状: {embeddings.shape}")
 
 # 确保保存目录存在
 save_folder = params['save_folder']
@@ -166,7 +224,7 @@ def compute_centroids_with_progress(data, ncentroids, niter, seed, Kmeans_with_c
 logger.info("开始聚类过程...")
 try:
     compute_centroids_with_progress(
-        data=emb_memory,
+        data=embeddings,
         ncentroids=params['ncentroids'],
         niter=params['niter'],
         seed=params['seed'],
@@ -199,3 +257,4 @@ except Exception as e:
     import traceback
     logger.error(traceback.format_exc())
     sys.exit(1)
+

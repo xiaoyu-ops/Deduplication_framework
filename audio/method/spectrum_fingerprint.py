@@ -6,6 +6,7 @@ from skimage.filters import threshold_otsu
 from skimage.transform import resize
 from tqdm import tqdm
 import glob
+import json
 
 def create_binary_spectrogram(audio_file, output_file=None, show_plot=False):
     """
@@ -89,9 +90,25 @@ def process_wav_files(audio_dir, output_file="audio/binary_array_dict.npy"):
     
     return binary_array_dict
 
+def load_config_json(config_path):
+    """从 JSON 配置文件加载配置，出错时返回 None"""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"配置文件未找到: {config_path}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"配置文件格式错误: {e}")
+        return None
+    
 if __name__ == "__main__":
+
+    config_path = r"D:\桌面\Deduplication_framework\audio\method\audio_config.json"
+    data = load_config_json(config_path)
     # 指定包含WAV文件的目录
-    audio_directory = "./audio/dataset"  # 修改为你的WAV文件目录
+    audio_directory = data.get("paths", {}).get("dataset_dir", "./audio/dataset")
+    #audio_directory = "./audio/dataset"  # 修改为你的WAV文件目录
     
     # 处理WAV文件
     result = process_wav_files(audio_directory)

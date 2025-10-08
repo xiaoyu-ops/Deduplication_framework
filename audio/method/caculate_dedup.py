@@ -6,6 +6,18 @@ from datasets import load_dataset
 import json
 import glob
 
+def load_config_json(config_path):
+    """从 JSON 配置文件加载配置，出错时返回 None"""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"配置文件未找到: {config_path}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"配置文件格式错误: {e}")
+        return None
+    
 # 先将SIMILAR_PAIRS.TXT加载到内存中
 def load_similar_pairs(file_path,threshold=0.83):
     """
