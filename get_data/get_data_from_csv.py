@@ -70,13 +70,13 @@ def save_to_json(data, output_path, format_type="list",label = None):
 
 if __name__ == "__main__":
     # 测试函数
-    df = pd.read_csv(r"D:\桌面\Deduplication_framework\zh-freepik-com-2025-09-28.csv")
+    df = pd.read_csv(r"D:\桌面\Deduplication_framework\get_data\zh-freepik-com-2025-09-28.csv")
     print(df.columns)
-    indices = get_data_from_csv(r"D:\桌面\Deduplication_framework\zh-freepik-com-2025-09-28.csv", index_col='image-src',label='Dog')
+    indices = get_data_from_csv(r"D:\桌面\Deduplication_framework\get_data\zh-freepik-com-2025-09-28.csv", index_col='image-src',label='Dog')
     print(indices[:3]) 
     save_to_json(indices, r"D:\桌面\Deduplication_framework\mix_dataset\output_dog.json", format_type="individual_objects",label='Dog')
-    df = pd.read_csv(r"D:\桌面\Deduplication_framework\zh-freepik-com-2025-09-29.csv")
+    df = pd.read_csv(r"D:\桌面\Deduplication_framework\get_data\zh-freepik-com-2025-09-29.csv")
     print(df.columns)
-    indices = get_data_from_csv(r"D:\桌面\Deduplication_framework\zh-freepik-com-2025-09-29.csv", index_col='image-src',label='cat')
+    indices = get_data_from_csv(r"D:\桌面\Deduplication_framework\get_data\zh-freepik-com-2025-09-29.csv", index_col='image-src',label='cat')
     print(indices[:3]) 
     save_to_json(indices, f"D:\桌面\Deduplication_framework\mix_dataset\output_cat.json", format_type="individual_objects",label='Cat')

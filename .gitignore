@@ -28,3 +28,6 @@ audio/test.py
 *.png
 *.arrow
 *.pickle
+mix_dataset_10k
+evaluation
+mix_dataset_eval
