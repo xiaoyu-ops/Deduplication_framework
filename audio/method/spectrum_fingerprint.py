@@ -45,7 +45,8 @@ def create_binary_spectrogram(audio_file, output_file=None, show_plot=False):
     # 将布尔值转换为0和1
     binary_spectrogram_resized = binary_spectrogram_resized.astype(np.uint8)
     frequencyPeaks = np.reshape(binary_spectrogram_resized, (4096,))
-    print(f"处理文件 {audio_file}: 4096位向量生成完成")
+    # Log in English to avoid encoding issues on Windows consoles
+    print(f"Processed file {audio_file}: generated 4096-dim fingerprint vector")
     
     return frequencyPeaks
 
@@ -61,10 +62,10 @@ def process_wav_files(audio_dir, output_file="audio/binary_array_dict.npy"):
     wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
     
     if not wav_files:
-        print(f"在目录 {audio_dir} 中没有找到WAV文件")
+        print(f"No WAV files found in directory: {audio_dir}")
         return
-    
-    print(f"找到 {len(wav_files)} 个WAV文件")
+
+    print(f"Found {len(wav_files)} WAV files in {audio_dir}")
     
     binary_array_dict = {}
     
@@ -79,14 +80,14 @@ def process_wav_files(audio_dir, output_file="audio/binary_array_dict.npy"):
             # 或者使用索引: binary_array_dict[index] = binary_spec
             
         except Exception as e:
-            print(f"处理文件 {wav_file} 时出错: {e}")
+            print(f"Failed to process file {wav_file}: {e}")
             continue
     
-    print(f"成功处理了 {len(binary_array_dict)} 个文件")
+        print(f"Successfully processed {len(binary_array_dict)} files")
     
-    # 保存结果
-    np.save(output_file, binary_array_dict)
-    print(f"音频指纹向量已保存到: {output_file}")
+        # Save results
+        np.save(output_file, binary_array_dict)
+        print(f"Saved audio fingerprint vectors to: {output_file}")
     
     return binary_array_dict
 
@@ -96,10 +97,10 @@ def load_config_json(config_path):
         with open(config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"配置文件未找到: {config_path}")
+        print(f"Config file not found: {config_path}")
         return None
     except json.JSONDecodeError as e:
-        print(f"配置文件格式错误: {e}")
+        print(f"Config file JSON error: {e}")
         return None
     
 if __name__ == "__main__":
@@ -114,5 +115,5 @@ if __name__ == "__main__":
     result = process_wav_files(audio_directory)
     
     if result:
-        print("处理完成!")
-        print(f"生成的指纹字典包含 {len(result)} 个音频文件")
+        print("Processing complete!")
+        print(f"Generated fingerprint dictionary contains {len(result)} audio files")

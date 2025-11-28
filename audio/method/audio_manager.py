@@ -11,7 +11,7 @@ root_dir = os.path.dirname(parent_dir)  # 添加这行，获取根目录
 
 # 将根目录添加到Python路径（这样可以导入env_manager包）
 sys.path.insert(0, root_dir)
-print(f"已添加根目录到路径: {root_dir}")
+print(f"Added project root to sys.path: {root_dir}")
 
 # 现在可以用完整包路径导入
 from env_manager.manager import EnvManager
@@ -24,62 +24,62 @@ def create_deduplicated_datasets():
     dataset_dir = os.path.join(parent_dir, "dataset")  # audio/dataset
     dedup_results_dir = os.path.join(current_dir, "dedup_results")  # audio/method/dedup_results
     
-    print("开始创建去重后的数据集")
-    print(f"数据集目录: {dataset_dir}")
-    print(f"去重结果目录: {dedup_results_dir}")
+    print("Starting creation of deduplicated dataset")
+    print(f"Dataset directory: {dataset_dir}")
+    print(f"Dedup results directory: {dedup_results_dir}")
     
     # 检查原始数据集是否存在
     if not os.path.exists(dataset_dir):
-        print(f"原始数据集目录不存在: {dataset_dir}")
+        print(f"Original dataset directory not found: {dataset_dir}")
         return False
     
     # 获取所有原始WAV文件
     wav_files = glob.glob(os.path.join(dataset_dir, "*.wav"))
     wav_files.sort()
     
-    print(f"原始数据集包含 {len(wav_files)} 个WAV文件")
+    print(f"Original dataset contains {len(wav_files)} WAV files")
     
     if not wav_files:
-        print("原始数据集中没有找到WAV文件")
+        print("No WAV files found in the dataset")
         return False
     
     # 检查去重结果目录是否存在
     if not os.path.exists(dedup_results_dir):
-        print(f"去重结果目录不存在: {dedup_results_dir}")
-        print("请先执行音频去重(选项2)来生成去重结果")
+        print(f"Dedup results directory not found: {dedup_results_dir}")
+        print("Please run audio deduplication (option 2) to generate results first")
         return False
     
     # 查找所有去重结果文件
     remove_files = glob.glob(os.path.join(dedup_results_dir, "*_dedup_result.txt"))
     
-    print(f"在 {dedup_results_dir} 中查找保留文件列表...")
-    print(f"查找模式: *_keep_files.txt")
+    print(f"Searching for keep file lists in {dedup_results_dir}...")
+    print(f"Search pattern: *_keep_files.txt")
     
     # 调试：列出目录中的所有文件
     if os.path.exists(dedup_results_dir):
         all_files = os.listdir(dedup_results_dir)
-        print(f"去重结果目录中的所有文件: {all_files}")
+        print(f"Files in dedup results directory: {all_files}")
         
         # 查找所有可能的结果文件
         result_files = [f for f in all_files if 'threshold_' in f and f.endswith('.txt')]
         print(f"找到的结果文件: {result_files}")
     
     if not remove_files:
-        print(f"没有找到保留文件列表")
-        print("可能的原因:")
-        print("1. 还没有执行去重操作")
-        print("2. 去重结果文件名格式不对")
-        print("3. 权限问题导致文件未生成")
+        print(f"No keep file lists found in {dedup_results_dir}")
+        print("Possible reasons:")
+        print("1. Deduplication has not been run yet")
+        print("2. Dedup result filenames do not match expected pattern")
+        print("3. Permission issues prevented file creation")
         
         # 尝试查找其他格式的文件
         alternative_files = glob.glob(os.path.join(dedup_results_dir, "threshold_*_dedup_result.txt"))
         if alternative_files:
-            print(f"找到了去重结果文件但没有keep文件: {alternative_files}")
-            print("这可能是因为extract_local_file_info函数没有成功创建keep文件")
+            print(f"Found dedup result files but no keep files: {alternative_files}")
+            print("This may indicate extract_local_file_info did not create keep files")
         
         return False
     
-    print(f"找到 {len(remove_files)} 个去重结果文件: {[os.path.basename(f) for f in remove_files]}")
+    print(f"Found {len(remove_files)} dedup result files: {[os.path.basename(f) for f in remove_files]}")
     
     success_count = 0
     
@@ -92,16 +92,16 @@ def create_deduplicated_datasets():
             else:
                 threshold = "unknown"
             
-            print(f"\n处理阈值 {threshold} 的去重结果...")
+            print(f"\nProcessing dedup results for threshold {threshold}...")
             
             # 读取要删除的文件索引
             remove_indices = []
             remove_list = os.path.join(remove_file, "remove_files.txt")  # remove_file是文件夹路径
             
-            print(f"读取删除文件列表: {remove_list}")
+            print(f"Reading remove file list: {remove_list}")
             
             if not os.path.exists(remove_list):
-                print(f"文件不存在: {remove_list}")
+                print(f"File does not exist: {remove_list}")
                 continue
                 
             with open(remove_list, 'r', encoding='utf-8') as f:
@@ -112,17 +112,17 @@ def create_deduplicated_datasets():
                         remove_indices.append(int(line))
             
             if not remove_indices:
-                print(f"阈值 {threshold}: 没有找到有效的删除索引")
+                print(f"Threshold {threshold}: no valid remove indices found")
                 continue
             
-            print(f"阈值 {threshold}: 找到 {len(remove_indices)} 个要删除的文件")
+            print(f"Threshold {threshold}: found {len(remove_indices)} files to remove")
             
             # 计算要保留的文件索引
             all_indices = set(range(len(wav_files)))
             remove_indices_set = set(remove_indices)
             keep_indices = sorted(list(all_indices - remove_indices_set))
             
-            print(f"阈值 {threshold}: 保留 {len(keep_indices)} 个文件 (删除 {len(remove_indices)} 个)")
+            print(f"Threshold {threshold}: keeping {len(keep_indices)} files (removed {len(remove_indices)})")
             
             # 创建输出目录
             output_dataset_dir = os.path.join(dedup_results_dir, f"threshold_{threshold}_dataset")
@@ -142,11 +142,11 @@ def create_deduplicated_datasets():
                         shutil.copy2(src_file, dst_file)
                         copied_count += 1
                     else:
-                        print(f"索引 {idx} 超出文件范围 (最大: {len(wav_files)-1})")
+                        print(f"Index {idx} out of range (max: {len(wav_files)-1})")
                         error_count += 1
                         
                 except Exception as e:
-                    print(f"复制文件失败 (索引 {idx}): {e}")
+                    print(f"Failed to copy file (index {idx}): {e}")
                     error_count += 1
             
             # 生成统计报告
@@ -185,11 +185,11 @@ def create_deduplicated_datasets():
                         f.write("\n")
                     f.write(f"{idx:4d} ")
             
-            print(f"阈值 {threshold}: 成功复制 {copied_count} 个文件到 {output_dataset_dir}")
-            print(f"   统计报告: {stats_file}")
+            print(f"Threshold {threshold}: copied {copied_count} files to {output_dataset_dir}")
+            print(f"   Stats report: {stats_file}")
             
             if error_count > 0:
-                print(f"阈值 {threshold}: {error_count} 个文件复制失败")
+                print(f"Threshold {threshold}: {error_count} files failed to copy")
             
             success_count += 1
             
@@ -198,7 +198,7 @@ def create_deduplicated_datasets():
             continue
     
     print("\n" + "=" * 60)
-    print(f"数据集创建完成! 成功处理 {success_count} 个阈值")
+    print(f"Dataset creation complete! Successfully processed {success_count} thresholds")
     print("=" * 60)
     
     return success_count > 0

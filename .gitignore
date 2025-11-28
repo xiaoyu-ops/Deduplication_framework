@@ -31,3 +31,7 @@ audio/test.py
 mix_dataset_10k
 evaluation
 mix_dataset_eval
+mix_dataset
+artifacts
+outputs
+tests

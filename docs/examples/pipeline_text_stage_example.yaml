@@ -1,0 +1,24 @@
+general:
+  input_root: ./mix_dataset
+  output_root: ./outputs
+  temp_root: ./artifacts
+  resume: true
+
+executor:
+  type: local
+  envs:
+    text: text-dedup
+
+sorter:
+  manifest_name: sorter_manifest.csv
+  move_files: false
+
+text:
+  enabled: true
+  entrypoint: pipelines/modalities/text_runner.py
+  workdir: .
+  args: []
+  manifest_subset_count: 500
+  env:
+    PIPELINE_TEXT_MODE: batch
+  output_dir: text/dedup_dataset

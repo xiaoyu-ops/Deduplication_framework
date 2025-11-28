@@ -1,0 +1,48 @@
+# Example multimodal pipeline configuration
+
+general:
+  input_root: ../../tests/smoke_dataset
+  output_root: ../../outputs/example_pipeline
+  temp_root: ../../artifacts/example_pipeline
+  resume: true
+  retry:
+    max_retries: 1
+    delay_seconds: 5
+
+executor:
+  type: local
+  conda_executable: conda
+  envs: {}
+
+sorter:
+  enabled: true
+  prediction_path: ../../tests/pipeline_smoke_config.yaml
+  manifest_name: manifest.csv
+  move_files: false
+
+image:
+  enabled: false
+  entrypoint: ../../pipelines/modalities/image_runner.py
+  workdir: ../../
+  output_dir: ../../outputs/example_pipeline/image
+  config_file: ../../image/method/image_config.json
+  args: []
+
+audio:
+  enabled: false
+  entrypoint: ../../pipelines/modalities/audio_runner.py
+  workdir: ../../
+  output_dir: ../../outputs/example_pipeline/audio
+  config_file: ../../audio/method/audio_config.json
+  args: []
+
+text:
+  enabled: false
+  entrypoint: ../../pipelines/modalities/text_runner.py
+  workdir: ../../
+  output_dir: ../../outputs/example_pipeline/text
+  args: []
+
+report:
+  summary_file: ../../outputs/example_pipeline/summary.json
+  markdown_file: ../../outputs/example_pipeline/report.md
