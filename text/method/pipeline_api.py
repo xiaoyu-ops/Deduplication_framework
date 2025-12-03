@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 import yaml
 
@@ -28,6 +28,9 @@ class TextDedupConfig:
     method: str = "jaccard"
     threshold: float = 0.8
     max_candidates: int = 5000
+    # 当候选数超过 max_candidates 时，使用滚动窗口快速去重，
+    # 该值表示每次仅与最近保留的 `window_size` 个样本比较
+    window_size: int = 100
 
 
 @dataclass
@@ -51,6 +54,27 @@ class TextPipelineResult:
     duplicates: List[Dict[str, object]]
     missing: List[Path]
     stats: Dict[str, object]
+
+
+def _progress_reporter(total: int, label: str, prefix: str) -> Callable[[int], None]:
+    """Print occasional progress updates for long-running operations."""
+
+    total = int(max(0, total))
+    if total <= 0:
+        return lambda _current: None
+
+    step = max(1, total // 10)
+    next_emit = step
+
+    def _report(current: int) -> None:
+        nonlocal next_emit
+        current = min(max(0, current), total)
+        if current >= next_emit or current == total:
+            percent = (current / total) * 100 if total else 100.0
+            print(f"{prefix}{label}: {current}/{total} ({percent:.1f}%)", flush=True)
+            next_emit = min(total, current + step)
+
+    return _report
 
 
 _NON_ALNUM_RE = re.compile(r"[^\w\s\u4e00-\u9fff]", re.UNICODE)
@@ -248,17 +272,16 @@ def _run_deduplication(
             "skipped": 0,
         }
 
+    # If candidate set is very large, fall back to a fast rolling-window
+    # deduplication to avoid O(n^2) behavior. This keeps memory and CPU
+    # usage bounded while still removing many near-duplicates in practical
+    # datasets where duplicates tend to be locally clustered.
     if len(features) > config.max_candidates:
         print(
             f"[text pipeline] candidate count {len(features)} exceeds max_candidates={config.max_candidates}; "
-            "skipping similarity dedup and treating all files as unique."
+            "using rolling-window quick deduplication"
         )
-        return {
-            "keepers": list(paths),
-            "duplicates": [],
-            "duplicate_count": 0,
-            "skipped": len(features),
-        }
+        return _deduplicate_windowed(paths, features, config.threshold, config.window_size)
 
     method = (config.method or "jaccard").lower()
     if method == "jaccard":
@@ -286,6 +309,8 @@ def _deduplicate_by_jaccard(
     duplicates: List[Dict[str, object]] = []
     duplicate_count = 0
     seen: Set[int] = set()
+    total = len(paths)
+    progress = _progress_reporter(total, "jaccard dedup", "[text pipeline] ")
 
     for idx, path in enumerate(paths):
         if idx in seen:
@@ -308,6 +333,61 @@ def _deduplicate_by_jaccard(
                 }
             )
             duplicate_count += len(dup_entries)
+        progress(idx + 1)
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
+
+
+def _deduplicate_windowed(
+    paths: Sequence[Path],
+    features: Sequence[Set[str]],
+    threshold: float,
+    window_size: int = 100,
+) -> Dict[str, Any]:
+    """Fast rolling-window deduplication.
+
+    For each candidate, only compare against the most recent `window_size`
+    keepers. This reduces complexity to O(n * window_size) and is effective
+    when duplicates are locally clustered (common in scraped datasets).
+    """
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    duplicate_count = 0
+
+    # store kept features for windowed comparisons
+    kept_features: List[Set[str]] = []
+
+    for idx, path in enumerate(paths):
+        current_feat = features[idx]
+        is_dup = False
+        dup_entries: List[Dict[str, object]] = []
+
+        # Compare to up to `window_size` most recent keepers
+        start = max(0, len(kept_features) - window_size)
+        for j in range(start, len(kept_features)):
+            sim = _jaccard_similarity(current_feat, kept_features[j])
+            if sim >= threshold:
+                # record as duplicate of the corresponding keeper
+                is_dup = True
+                dup_entries.append({"path": str(keepers[j]), "similarity": float(sim)})
+                # Do not break; allow recording multiple close matches within window
+
+        if is_dup:
+            duplicates.append({
+                "original": str(keepers[-1]) if keepers else str(path),
+                "duplicates": dup_entries,
+                "similarity_threshold": float(threshold),
+            })
+            duplicate_count += len(dup_entries)
+        else:
+            # New keeper
+            keepers.append(path)
+            kept_features.append(current_feat)
 
     return {
         "keepers": keepers,

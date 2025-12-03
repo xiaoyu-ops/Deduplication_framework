@@ -343,6 +343,78 @@ class PipelineOrchestrator:
         )
         self._write_run_manifest()
 
+    def _check_manifest_accessibility(self, subset: List[str], stage_dir: Path, modality: str) -> None:
+        """
+        Assert that manifest subset paths are accessible from the orchestrator's execution environment.
+        If the missing fraction or absolute missing count exceeds configured thresholds, write
+        a failed StageArtifact and raise RuntimeError to abort the stage early.
+
+        Configuration (optional) under `general.manifest_check`:
+        - max_missing_fraction: float (default 0.10)
+        - max_missing_count: int or None (default None)
+        - sample_limit: int (how many missing paths to include in artifact, default 50)
+        """
+        input_root = self.config.general.get("input_root")
+        max_missing_fraction = 0.10
+        max_missing_count = None
+        sample_limit = 50
+        mcfg = self.config.general.get("manifest_check") or {}
+        try:
+            if isinstance(mcfg, dict):
+                max_missing_fraction = float(mcfg.get("max_missing_fraction", max_missing_fraction))
+                if mcfg.get("max_missing_count") is not None:
+                    max_missing_count = int(mcfg.get("max_missing_count"))
+                sample_limit = int(mcfg.get("sample_limit", sample_limit))
+        except Exception:
+            # ignore bad config and use defaults
+            pass
+
+        missing_files: list[str] = []
+        for p in subset:
+            # Try as-is first, then relative to input_root if provided
+            try_paths = [Path(p)]
+            if input_root and not Path(p).is_absolute():
+                try_paths.append(Path(input_root) / p)
+            exists = False
+            for tp in try_paths:
+                if tp.exists():
+                    exists = True
+                    break
+            if not exists:
+                missing_files.append(p)
+
+        total = len(subset)
+        missing_count = len(missing_files)
+        missing_fraction = (missing_count / total) if total > 0 else 0.0
+
+        if (missing_fraction > max_missing_fraction) or (
+            max_missing_count is not None and missing_count > max_missing_count
+        ):
+            # Record a failed artifact with details for debugging and fail fast.
+            snippet = missing_files[:sample_limit]
+            metadata = {
+                "config_hash": None,
+                "file_count": total,
+                "missing_count": missing_count,
+                "missing_fraction": missing_fraction,
+                "missing_samples": snippet,
+                "notes": (
+                    f"Manifest accessibility check failed for {modality}: "
+                    f"{missing_count}/{total} missing ({missing_fraction:.2%})"
+                ),
+            }
+            artifact = StageArtifact(
+                stage_name=f"stage2_{modality}",
+                status="failed",
+                elapsed_seconds=0.0,
+                output_paths={"manifest": str(stage_dir / "input_manifest.txt")},
+                metadata=metadata,
+            )
+            # Save artifact so run manifest captures failure reasons
+            self.save_stage_result(f"stage2_{modality}", artifact, success=False)
+            # Raise to abort the stage immediately
+            raise RuntimeError(metadata["notes"])
+
     def _prepare_modality_tasks(self) -> list[Dict[str, Any]]:
         if self.sorter_manifest is None:
             raise RuntimeError("Sorter manifest is not loaded; run sorter stage first")
@@ -524,110 +596,174 @@ class PipelineOrchestrator:
         if extra_args:
             args.extend(extra_args)
 
-        manifest_limit = modality_config.get("manifest_subset_count")
-        if manifest_limit:
-            subset = files[:manifest_limit]
-        else:
-            subset = files
+        manifest_limit = (
+            modality_config.get("manifest_subset_count")
+            or modality_config.get("batch_size")
+            or self.config.general.get("batch_size")
+        )
 
-        manifest_path = stage_dir / "input_manifest.txt"
-        manifest_path.write_text("\n".join(subset), encoding="utf-8")
-        extra_env = {
-            "PIPELINE_IMAGE_INPUT_LIST": str(manifest_path),
+        # Build chunks like text stage so we process all files instead of only the first subset
+        if manifest_limit and manifest_limit > 0:
+            chunks = [files[i : i + manifest_limit] for i in range(0, len(files), manifest_limit)]
+        else:
+            chunks = [files]
+
+        import shutil
+
+        extra_env_base = {
             "PIPELINE_IMAGE_TOTAL": str(len(files)),
         }
+
         env_overrides = modality_config.get("env")
         if isinstance(env_overrides, dict):
-            extra_env.update(env_overrides)
+            extra_env_base.update(env_overrides)
         output_dir = modality_config.get("output_dir")
         if output_dir:
-            extra_env.setdefault("PIPELINE_IMAGE_OUTPUT_DIR", str(output_dir))
+            extra_env_base.setdefault("PIPELINE_IMAGE_OUTPUT_DIR", str(output_dir))
         config_file = modality_config.get("config_file")
         if config_file:
-            extra_env.setdefault("PIPELINE_IMAGE_CONFIG_FILE", str(config_file))
+            extra_env_base.setdefault("PIPELINE_IMAGE_CONFIG_FILE", str(config_file))
+
+        # Check accessibility for first chunk (fail-fast if many missing)
+        first_subset = chunks[0] if chunks else []
+        try:
+            self._check_manifest_accessibility(first_subset, stage_dir, modality)
+        except Exception as exc:
+            self.logger.error("Image stage manifest accessibility assertion failed: %s", exc)
+            plan_entry["status"] = "failed"
+            results_map[modality] = {"error": str(exc)}
+            raise
 
         lock_acquired = False
+        chunk_results: List[Dict[str, Any]] = []
+        total_elapsed = 0.0
         try:
             acquire_stage_lock(stage_dir)
             lock_acquired = True
             self.logger.info(
-                "Running image stage with %d files (env=%s)",
-                len(subset),
+                "Running image stage in %d chunk(s) (env=%s), chunk_size=%s",
+                len(chunks),
                 env_name or "default",
+                str(manifest_limit),
             )
-            result = self.executor.run(
-                args,
-                env_name=env_name,
-                cwd=cwd,
-                capture_output=True,
-                check=True,
-                extra_env=extra_env,
-            )
-        except ExecutorError as exc:
-            self.logger.error("Image stage execution failed: %s", exc)
-            metadata = {
-                "config_hash": config_hash,
-                "env": env_name,
-                "command": args,
-                "error": str(exc),
-            }
-            artifact = StageArtifact(
-                stage_name=stage_name,
-                status="failed",
-                elapsed_seconds=0.0,
-                output_paths={},
-                metadata=metadata,
-            )
-            self.save_stage_result(stage_name, artifact, success=False)
-            plan_entry["status"] = "failed"
-            results_map[modality] = metadata
-            raise
+
+            for idx, chunk in enumerate(chunks, start=1):
+                chunk_manifest = stage_dir / f"input_manifest_{idx}.txt"
+                chunk_manifest.write_text("\n".join(chunk), encoding="utf-8")
+
+                extra_env = dict(extra_env_base)
+                extra_env["PIPELINE_IMAGE_INPUT_LIST"] = str(chunk_manifest)
+
+                try:
+                    result = self.executor.run(
+                        args,
+                        env_name=env_name,
+                        cwd=cwd,
+                        capture_output=True,
+                        check=True,
+                        extra_env=extra_env,
+                    )
+                except ExecutorError as exc:
+                    self.logger.error("Image chunk %d execution failed: %s", idx, exc)
+                    metadata = {
+                        "config_hash": config_hash,
+                        "env": env_name,
+                        "chunk_index": idx,
+                        "command": args,
+                        "error": str(exc),
+                    }
+                    artifact = StageArtifact(
+                        stage_name=stage_name,
+                        status="failed",
+                        elapsed_seconds=total_elapsed,
+                        output_paths={
+                            "manifests": [str(stage_dir / f"input_manifest_{i+1}.txt") for i in range(len(chunks))],
+                        },
+                        metadata=metadata,
+                    )
+                    self.save_stage_result(stage_name, artifact, success=False)
+                    plan_entry["status"] = "failed"
+                    results_map[modality] = metadata
+                    raise
+
+                # write per-chunk stdout/stderr
+                stdout_path = stage_dir / f"stdout_{idx}.log"
+                stderr_path = stage_dir / f"stderr_{idx}.log"
+                try:
+                    stdout_text = result.stdout if result.stdout is not None else ""
+                except Exception:
+                    stdout_text = str(result.stdout)
+                try:
+                    stderr_text = result.stderr if result.stderr is not None else ""
+                except Exception:
+                    stderr_text = str(result.stderr)
+                stdout_path.write_text(stdout_text, encoding="utf-8")
+                stderr_path.write_text(stderr_text, encoding="utf-8")
+
+                total_elapsed += result.elapsed_seconds
+
+                runner_summary = self._load_runner_summary(modality, extra_env.get("PIPELINE_IMAGE_OUTPUT_DIR"))
+                chunk_dup_path = None
+                if runner_summary and runner_summary.get("duplicates_file"):
+                    try:
+                        dup_src = Path(runner_summary.get("duplicates_file"))
+                        if dup_src.exists():
+                            chunk_dup_path = stage_dir / f"image_duplicates_{idx}.json"
+                            shutil.copy2(dup_src, chunk_dup_path)
+                    except Exception:
+                        chunk_dup_path = None
+
+                chunk_results.append({
+                    "chunk_index": idx,
+                    "manifest": str(chunk_manifest),
+                    "stdout": str(stdout_path),
+                    "stderr": str(stderr_path),
+                    "runner_summary": runner_summary,
+                    "duplicates_copy": str(chunk_dup_path) if chunk_dup_path is not None else None,
+                    "elapsed_seconds": result.elapsed_seconds,
+                })
+
         finally:
             if lock_acquired:
                 release_stage_lock(stage_dir)
 
-        stdout_path = stage_dir / "stdout.log"
-        stderr_path = stage_dir / "stderr.log"
-        # Ensure we always write a string (handle None) and use utf-8.
-        try:
-            stdout_text = result.stdout if result.stdout is not None else ""
-        except Exception:
-            stdout_text = str(result.stdout)
-        try:
-            stderr_text = result.stderr if result.stderr is not None else ""
-        except Exception:
-            stderr_text = str(result.stderr)
-        stdout_path.write_text(stdout_text, encoding="utf-8")
-        stderr_path.write_text(stderr_text, encoding="utf-8")
-
-        metadata = {
+        aggregated_stats: Dict[str, Any] = {
             "config_hash": config_hash,
-            "file_count": len(subset),
+            "file_count": len(files),
             "total_candidates": len(files),
             "env": env_name,
-            "command": result.command,
-            "elapsed_seconds": result.elapsed_seconds,
+            "chunks": len(chunk_results),
+            "elapsed_seconds": total_elapsed,
         }
-        runner_summary = self._load_runner_summary(
-            modality, extra_env.get("PIPELINE_IMAGE_OUTPUT_DIR")
-        )
-        if runner_summary:
-            metadata["runner_summary"] = runner_summary
+
+        merged_runner_stats: Dict[str, float] = {}
+        for cr in chunk_results:
+            rs = (cr.get("runner_summary") or {}).get("stats") or {}
+            for k, v in rs.items():
+                if isinstance(v, (int, float)):
+                    merged_runner_stats[k] = merged_runner_stats.get(k, 0) + float(v)
+
+        if merged_runner_stats:
+            aggregated_stats["runner_summary"] = {"modality": modality, "stats": merged_runner_stats}
+
+        output_paths = {
+            "manifests": [cr["manifest"] for cr in chunk_results],
+            "stdout_logs": [cr["stdout"] for cr in chunk_results],
+            "stderr_logs": [cr["stderr"] for cr in chunk_results],
+            "duplicates": [cr.get("duplicates_copy") for cr in chunk_results if cr.get("duplicates_copy")],
+        }
+
         artifact = StageArtifact(
             stage_name=stage_name,
             status="success",
-            elapsed_seconds=result.elapsed_seconds,
-            output_paths={
-                "stdout": str(stdout_path),
-                "stderr": str(stderr_path),
-                "manifest": str(manifest_path),
-            },
-            metadata=metadata,
+            elapsed_seconds=total_elapsed,
+            output_paths=output_paths,
+            metadata=aggregated_stats,
         )
         self.save_stage_result(stage_name, artifact, success=True)
         plan_entry["status"] = "completed"
-        plan_entry["processed_files"] = len(subset)
-        results_map[modality] = metadata
+        plan_entry["processed_files"] = len(files)
+        results_map[modality] = aggregated_stats
 
     def _run_audio_stage(
         self,
@@ -677,103 +813,172 @@ class PipelineOrchestrator:
         if extra_args:
             args.extend(extra_args)
 
-        manifest_limit = modality_config.get("manifest_subset_count")
-        subset = files[:manifest_limit] if manifest_limit else files
+        manifest_limit = (
+            modality_config.get("manifest_subset_count")
+            or modality_config.get("batch_size")
+            or self.config.general.get("batch_size")
+        )
 
-        manifest_path = stage_dir / "input_manifest.txt"
-        manifest_path.write_text("\n".join(subset), encoding="utf-8")
-        extra_env = {
-            "PIPELINE_AUDIO_INPUT_LIST": str(manifest_path),
+        if manifest_limit and manifest_limit > 0:
+            chunks = [files[i : i + manifest_limit] for i in range(0, len(files), manifest_limit)]
+        else:
+            chunks = [files]
+
+        import shutil
+
+        extra_env_base = {
             "PIPELINE_AUDIO_TOTAL": str(len(files)),
         }
+
         env_overrides = modality_config.get("env")
         if isinstance(env_overrides, dict):
-            extra_env.update(env_overrides)
+            extra_env_base.update(env_overrides)
         output_dir = modality_config.get("output_dir")
         if output_dir:
-            extra_env.setdefault("PIPELINE_AUDIO_OUTPUT_DIR", str(output_dir))
+            extra_env_base.setdefault("PIPELINE_AUDIO_OUTPUT_DIR", str(output_dir))
+        config_file = modality_config.get("config_file")
+        if config_file:
+            extra_env_base.setdefault("PIPELINE_AUDIO_CONFIG_FILE", str(config_file))
+
+        # Pre-check first chunk accessibility
+        first_subset = chunks[0] if chunks else []
+        try:
+            self._check_manifest_accessibility(first_subset, stage_dir, modality)
+        except Exception as exc:
+            self.logger.error("Audio stage manifest accessibility assertion failed: %s", exc)
+            plan_entry["status"] = "failed"
+            results_map[modality] = {"error": str(exc)}
+            raise
 
         lock_acquired = False
+        chunk_results: List[Dict[str, Any]] = []
+        total_elapsed = 0.0
         try:
             acquire_stage_lock(stage_dir)
             lock_acquired = True
             self.logger.info(
-                "Running audio stage with %d files (env=%s)",
-                len(subset),
+                "Running audio stage in %d chunk(s) (env=%s), chunk_size=%s",
+                len(chunks),
                 env_name or "default",
+                str(manifest_limit),
             )
-            result = self.executor.run(
-                args,
-                env_name=env_name,
-                cwd=cwd,
-                capture_output=True,
-                check=True,
-                extra_env=extra_env,
-            )
-        except ExecutorError as exc:
-            self.logger.error("Audio stage execution failed: %s", exc)
-            metadata = {
-                "config_hash": config_hash,
-                "env": env_name,
-                "command": args,
-                "error": str(exc),
-            }
-            artifact = StageArtifact(
-                stage_name=stage_name,
-                status="failed",
-                elapsed_seconds=0.0,
-                output_paths={},
-                metadata=metadata,
-            )
-            self.save_stage_result(stage_name, artifact, success=False)
-            plan_entry["status"] = "failed"
-            results_map[modality] = metadata
-            raise
+
+            for idx, chunk in enumerate(chunks, start=1):
+                chunk_manifest = stage_dir / f"input_manifest_{idx}.txt"
+                chunk_manifest.write_text("\n".join(chunk), encoding="utf-8")
+
+                extra_env = dict(extra_env_base)
+                extra_env["PIPELINE_AUDIO_INPUT_LIST"] = str(chunk_manifest)
+
+                try:
+                    result = self.executor.run(
+                        args,
+                        env_name=env_name,
+                        cwd=cwd,
+                        capture_output=True,
+                        check=True,
+                        extra_env=extra_env,
+                    )
+                except ExecutorError as exc:
+                    self.logger.error("Audio chunk %d execution failed: %s", idx, exc)
+                    metadata = {
+                        "config_hash": config_hash,
+                        "env": env_name,
+                        "chunk_index": idx,
+                        "command": args,
+                        "error": str(exc),
+                    }
+                    artifact = StageArtifact(
+                        stage_name=stage_name,
+                        status="failed",
+                        elapsed_seconds=total_elapsed,
+                        output_paths={
+                            "manifests": [str(stage_dir / f"input_manifest_{i+1}.txt") for i in range(len(chunks))],
+                        },
+                        metadata=metadata,
+                    )
+                    self.save_stage_result(stage_name, artifact, success=False)
+                    plan_entry["status"] = "failed"
+                    results_map[modality] = metadata
+                    raise
+
+                stdout_path = stage_dir / f"stdout_{idx}.log"
+                stderr_path = stage_dir / f"stderr_{idx}.log"
+                try:
+                    stdout_text = result.stdout if result.stdout is not None else ""
+                except Exception:
+                    stdout_text = str(result.stdout)
+                try:
+                    stderr_text = result.stderr if result.stderr is not None else ""
+                except Exception:
+                    stderr_text = str(result.stderr)
+                stdout_path.write_text(stdout_text, encoding="utf-8")
+                stderr_path.write_text(stderr_text, encoding="utf-8")
+
+                total_elapsed += result.elapsed_seconds
+
+                runner_summary = self._load_runner_summary(modality, extra_env.get("PIPELINE_AUDIO_OUTPUT_DIR"))
+                chunk_dup_path = None
+                if runner_summary and runner_summary.get("duplicates_file"):
+                    try:
+                        dup_src = Path(runner_summary.get("duplicates_file"))
+                        if dup_src.exists():
+                            chunk_dup_path = stage_dir / f"audio_duplicates_{idx}.json"
+                            shutil.copy2(dup_src, chunk_dup_path)
+                    except Exception:
+                        chunk_dup_path = None
+
+                chunk_results.append({
+                    "chunk_index": idx,
+                    "manifest": str(chunk_manifest),
+                    "stdout": str(stdout_path),
+                    "stderr": str(stderr_path),
+                    "runner_summary": runner_summary,
+                    "duplicates_copy": str(chunk_dup_path) if chunk_dup_path is not None else None,
+                    "elapsed_seconds": result.elapsed_seconds,
+                })
+
         finally:
             if lock_acquired:
                 release_stage_lock(stage_dir)
 
-        stdout_path = stage_dir / "stdout.log"
-        stderr_path = stage_dir / "stderr.log"
-        try:
-            stdout_text = result.stdout if result.stdout is not None else ""
-        except Exception:
-            stdout_text = str(result.stdout)
-        try:
-            stderr_text = result.stderr if result.stderr is not None else ""
-        except Exception:
-            stderr_text = str(result.stderr)
-        stdout_path.write_text(stdout_text, encoding="utf-8")
-        stderr_path.write_text(stderr_text, encoding="utf-8")
-
-        metadata = {
+        aggregated_stats: Dict[str, Any] = {
             "config_hash": config_hash,
-            "file_count": len(subset),
+            "file_count": len(files),
             "total_candidates": len(files),
             "env": env_name,
-            "command": result.command,
-            "elapsed_seconds": result.elapsed_seconds,
+            "chunks": len(chunk_results),
+            "elapsed_seconds": total_elapsed,
         }
-        runner_summary = self._load_runner_summary(
-            modality, extra_env.get("PIPELINE_AUDIO_OUTPUT_DIR")
-        )
-        if runner_summary:
-            metadata["runner_summary"] = runner_summary
+
+        merged_runner_stats: Dict[str, float] = {}
+        for cr in chunk_results:
+            rs = (cr.get("runner_summary") or {}).get("stats") or {}
+            for k, v in rs.items():
+                if isinstance(v, (int, float)):
+                    merged_runner_stats[k] = merged_runner_stats.get(k, 0) + float(v)
+
+        if merged_runner_stats:
+            aggregated_stats["runner_summary"] = {"modality": modality, "stats": merged_runner_stats}
+
+        output_paths = {
+            "manifests": [cr["manifest"] for cr in chunk_results],
+            "stdout_logs": [cr["stdout"] for cr in chunk_results],
+            "stderr_logs": [cr["stderr"] for cr in chunk_results],
+            "duplicates": [cr.get("duplicates_copy") for cr in chunk_results if cr.get("duplicates_copy")],
+        }
+
         artifact = StageArtifact(
             stage_name=stage_name,
             status="success",
-            elapsed_seconds=result.elapsed_seconds,
-            output_paths={
-                "stdout": str(stdout_path),
-                "stderr": str(stderr_path),
-                "manifest": str(manifest_path),
-            },
-            metadata=metadata,
+            elapsed_seconds=total_elapsed,
+            output_paths=output_paths,
+            metadata=aggregated_stats,
         )
         self.save_stage_result(stage_name, artifact, success=True)
         plan_entry["status"] = "completed"
-        plan_entry["processed_files"] = len(subset)
-        results_map[modality] = metadata
+        plan_entry["processed_files"] = len(files)
+        results_map[modality] = aggregated_stats
 
     def _run_text_stage(
         self,
@@ -823,7 +1028,11 @@ class PipelineOrchestrator:
         if extra_args:
             args.extend(extra_args)
 
-        manifest_limit = modality_config.get("manifest_subset_count")
+        manifest_limit = (
+            modality_config.get("manifest_subset_count")
+            or modality_config.get("batch_size")
+            or self.config.general.get("batch_size")
+        )
         subset = files[:manifest_limit] if manifest_limit else files
 
         manifest_path = stage_dir / "input_manifest.txt"
@@ -832,94 +1041,173 @@ class PipelineOrchestrator:
             "PIPELINE_TEXT_INPUT_LIST": str(manifest_path),
             "PIPELINE_TEXT_TOTAL": str(len(files)),
         }
+        # Check manifest accessibility from orchestrator host before launching runner
+        try:
+            self._check_manifest_accessibility(subset, stage_dir, modality)
+        except Exception as exc:
+            self.logger.error("Text stage manifest accessibility assertion failed: %s", exc)
+            plan_entry["status"] = "failed"
+            results_map[modality] = {"error": str(exc)}
+            raise
         env_overrides = modality_config.get("env")
         if isinstance(env_overrides, dict):
             extra_env.update(env_overrides)
         output_dir = modality_config.get("output_dir")
         if output_dir:
             extra_env.setdefault("PIPELINE_TEXT_OUTPUT_DIR", str(output_dir))
+        config_file = modality_config.get("config_file")
+        if config_file:
+            extra_env.setdefault("PIPELINE_TEXT_CONFIG_FILE", str(config_file))
+
+        # Implement chunked execution for text stage to avoid handing very
+        # large manifests to a single runner invocation. We'll acquire the
+        # stage lock once, then iterate over slices of `files` of size
+        # `manifest_limit`, invoking the runner for each slice and
+        # aggregating per-chunk summaries.
+        import shutil
+
+        manifest_limit = manifest_limit
+        chunks: List[List[str]]
+        if manifest_limit and manifest_limit > 0:
+            chunks = [files[i : i + manifest_limit] for i in range(0, len(files), manifest_limit)]
+        else:
+            chunks = [files]
 
         lock_acquired = False
+        chunk_results: List[Dict[str, Any]] = []
+        total_elapsed = 0.0
         try:
             acquire_stage_lock(stage_dir)
             lock_acquired = True
             self.logger.info(
-                "Running text stage with %d files (env=%s)",
-                len(subset),
+                "Running text stage in %d chunk(s) (env=%s), chunk_size=%s",
+                len(chunks),
                 env_name or "default",
+                str(manifest_limit),
             )
-            result = self.executor.run(
-                args,
-                env_name=env_name,
-                cwd=cwd,
-                capture_output=True,
-                check=True,
-                extra_env=extra_env,
-            )
-        except ExecutorError as exc:
-            self.logger.error("Text stage execution failed: %s", exc)
-            metadata = {
-                "config_hash": config_hash,
-                "env": env_name,
-                "command": args,
-                "error": str(exc),
-            }
-            artifact = StageArtifact(
-                stage_name=stage_name,
-                status="failed",
-                elapsed_seconds=0.0,
-                output_paths={},
-                metadata=metadata,
-            )
-            self.save_stage_result(stage_name, artifact, success=False)
-            plan_entry["status"] = "failed"
-            results_map[modality] = metadata
-            raise
+
+            for idx, chunk in enumerate(chunks, start=1):
+                chunk_manifest = stage_dir / f"input_manifest_{idx}.txt"
+                chunk_manifest.write_text("\n".join(chunk), encoding="utf-8")
+
+                extra_env_chunk = dict(extra_env)
+                extra_env_chunk["PIPELINE_TEXT_INPUT_LIST"] = str(chunk_manifest)
+                # Keep PIPELINE_TEXT_TOTAL as total candidates
+
+                try:
+                    result = self.executor.run(
+                        args,
+                        env_name=env_name,
+                        cwd=cwd,
+                        capture_output=True,
+                        check=True,
+                        extra_env=extra_env_chunk,
+                    )
+                except ExecutorError as exc:
+                    self.logger.error("Text chunk %d execution failed: %s", idx, exc)
+                    metadata = {
+                        "config_hash": config_hash,
+                        "env": env_name,
+                        "chunk_index": idx,
+                        "command": args,
+                        "error": str(exc),
+                    }
+                    artifact = StageArtifact(
+                        stage_name=stage_name,
+                        status="failed",
+                        elapsed_seconds=total_elapsed,
+                        output_paths={
+                            "manifests": [str(stage_dir / f"input_manifest_{i+1}.txt") for i in range(len(chunks))],
+                        },
+                        metadata=metadata,
+                    )
+                    self.save_stage_result(stage_name, artifact, success=False)
+                    plan_entry["status"] = "failed"
+                    results_map[modality] = metadata
+                    raise
+
+                # write per-chunk stdout/stderr to distinct files
+                stdout_path = stage_dir / f"stdout_{idx}.log"
+                stderr_path = stage_dir / f"stderr_{idx}.log"
+                try:
+                    stdout_text = result.stdout if result.stdout is not None else ""
+                except Exception:
+                    stdout_text = str(result.stdout)
+                try:
+                    stderr_text = result.stderr if result.stderr is not None else ""
+                except Exception:
+                    stderr_text = str(result.stderr)
+                stdout_path.write_text(stdout_text, encoding="utf-8")
+                stderr_path.write_text(stderr_text, encoding="utf-8")
+
+                total_elapsed += result.elapsed_seconds
+
+                # try to load runner summary from output dir
+                runner_summary = self._load_runner_summary(modality, extra_env.get("PIPELINE_TEXT_OUTPUT_DIR"))
+                # If runner wrote duplicates file, copy it to stage_dir with chunk suffix
+                chunk_dup_path = None
+                if runner_summary and runner_summary.get("duplicates_file"):
+                    try:
+                        dup_src = Path(runner_summary.get("duplicates_file"))
+                        if dup_src.exists():
+                            chunk_dup_path = stage_dir / f"text_duplicates_{idx}.json"
+                            shutil.copy2(dup_src, chunk_dup_path)
+                    except Exception:
+                        chunk_dup_path = None
+
+                chunk_results.append({
+                    "chunk_index": idx,
+                    "manifest": str(chunk_manifest),
+                    "stdout": str(stdout_path),
+                    "stderr": str(stderr_path),
+                    "runner_summary": runner_summary,
+                    "duplicates_copy": str(chunk_dup_path) if chunk_dup_path is not None else None,
+                    "elapsed_seconds": result.elapsed_seconds,
+                })
+
         finally:
             if lock_acquired:
                 release_stage_lock(stage_dir)
 
-        stdout_path = stage_dir / "stdout.log"
-        stderr_path = stage_dir / "stderr.log"
-        try:
-            stdout_text = result.stdout if result.stdout is not None else ""
-        except Exception:
-            stdout_text = str(result.stdout)
-        try:
-            stderr_text = result.stderr if result.stderr is not None else ""
-        except Exception:
-            stderr_text = str(result.stderr)
-        stdout_path.write_text(stdout_text, encoding="utf-8")
-        stderr_path.write_text(stderr_text, encoding="utf-8")
-
-        metadata = {
+        # Aggregate chunk results into a single artifact metadata
+        aggregated_stats: Dict[str, Any] = {
             "config_hash": config_hash,
-            "file_count": len(subset),
+            "file_count": len(files),
             "total_candidates": len(files),
             "env": env_name,
-            "command": result.command,
-            "elapsed_seconds": result.elapsed_seconds,
+            "chunks": len(chunk_results),
+            "elapsed_seconds": total_elapsed,
         }
-        runner_summary = self._load_runner_summary(
-            modality, extra_env.get("PIPELINE_TEXT_OUTPUT_DIR")
-        )
-        if runner_summary:
-            metadata["runner_summary"] = runner_summary
+
+        # merge runner_summary.stats across chunks when available
+        merged_runner_stats: Dict[str, float] = {}
+        for cr in chunk_results:
+            rs = (cr.get("runner_summary") or {}).get("stats") or {}
+            for k, v in rs.items():
+                if isinstance(v, (int, float)):
+                    merged_runner_stats[k] = merged_runner_stats.get(k, 0) + float(v)
+
+        if merged_runner_stats:
+            aggregated_stats["runner_summary"] = {"modality": modality, "stats": merged_runner_stats}
+
+        output_paths = {
+            "manifests": [cr["manifest"] for cr in chunk_results],
+            "stdout_logs": [cr["stdout"] for cr in chunk_results],
+            "stderr_logs": [cr["stderr"] for cr in chunk_results],
+            "duplicates": [cr.get("duplicates_copy") for cr in chunk_results if cr.get("duplicates_copy")],
+        }
+
         artifact = StageArtifact(
             stage_name=stage_name,
             status="success",
-            elapsed_seconds=result.elapsed_seconds,
-            output_paths={
-                "stdout": str(stdout_path),
-                "stderr": str(stderr_path),
-                "manifest": str(manifest_path),
-            },
-            metadata=metadata,
+            elapsed_seconds=total_elapsed,
+            output_paths=output_paths,
+            metadata=aggregated_stats,
         )
         self.save_stage_result(stage_name, artifact, success=True)
         plan_entry["status"] = "completed"
-        plan_entry["processed_files"] = len(subset)
-        results_map[modality] = metadata
+        plan_entry["processed_files"] = len(files)
+        results_map[modality] = aggregated_stats
 
     def run_sorter_stage(self) -> None:
         stage_name = "stage1_sorter"

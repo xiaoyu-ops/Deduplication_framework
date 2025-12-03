@@ -1,0 +1,10 @@
+embedding:
+  ngram_size: 3
+  lowercase: true
+  strip_non_alnum: true
+  collapse_whitespace: true
+
+dedup:
+  method: jaccard
+  threshold: 0.5
+  max_candidates: 200000

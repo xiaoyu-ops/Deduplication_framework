@@ -1,11 +1,32 @@
 embedding:
-  backend: average_rgb
+  # 指定 embedding 后端。可选 'auto' / 'open_clip' / 'average_rgb'。
+  # 把后端切换为 'open_clip' 以使用 CLIP 模型获得更鲁棒的视觉表征（需安装 torch + open_clip）。
+  backend: open_clip
+  # 当使用深度模型时，指定模型的标识（示例为 HF hub 上的 CLIP 模型）
   model_name: hf-hub:laion/CLIP-ViT-B-16-laion2B-s34B-b88K
+  # 内部处理批次大小。较大 batch 可提高吞吐但增加显存使用
   batch_size: 8
+  # 设备选择：'cpu' / 'cuda' / 'auto'（auto 会在有可用 GPU 时使用 GPU）
   device: auto
+  # 如果指定的后端不可用或失败，回退到的后端实现
   fallback: average_rgb
-  save_embeddings_dir: D:/桌面/Deduplication_framework/outputs/test_run/embeddings
+  # Embeddings 保存目录（当前指向旧的 outputs/test_run/embeddings，请考虑替换为基于 general.output_root 的路径）
+  # Embedding 输出目录（改为 big_run 路径，避免写入旧的 test_run 目录）
+  save_embeddings_dir: D:/桌面/Deduplication_Framework/outputs/big_run/embeddings
+  # Embeddings 保存目录（可选），但不使用 precomputed 复用，pipeline 将在线计算 embeddings
+
 dedup:
-  method: pairwise
+  # 去重方法；可选 'pairwise' / 'semdedup'（legacy）/ 'clustering' 等。
+  # 我们将启用 legacy SemDeDup 复用历史产物：设为 'semdedup'。
+  method: semdedup
+  # 对于基于距离/相似度的方法，eps 用作判定相似/不同的阈值（legacy 模式下
+  # semdedup 会使用 legacy 资产中的 eps 目录来决定保留集合；此字段仍
+  # 可作为回退或 pairwise 时的阈值）。
   eps: 0.15
-  max_candidates: 100
+  # legacy SemDeDup 相关文件（如果存在），pipeline 会优先尝试读取这些
+  # 产物并直接复用保留索引以避免重新计算大规模嵌入/聚类。请根据本地路径
+  # 调整下列项。下面是本仓库中发现的示例位置：
+  legacy_keep_indices_file: D:/桌面/Deduplication_Framework/image/clustering/semdedup_result/eps_0.15/all_kept_samples.txt
+  legacy_cluster_dir: D:/桌面/Deduplication_Framework/image/clustering/results/ncentroids_2000/sorted_clusters
+  # 在执行 pairwise 或其他方法时用于限制候选数的上限
+  max_candidates: 50000

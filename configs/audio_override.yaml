@@ -1,0 +1,19 @@
+embedding:
+  fingerprint_backend: compute
+  threshold: 0.75
+
+dedup:
+  method: lsh
+  threshold: 0.75
+  max_candidates: 50000
+
+# Orchestrator-level manifest accessibility check settings.
+# These keys are read by the orchestrator from `general.manifest_check` if present.
+# - `max_missing_fraction`: fail stage early when fraction of missing files > this value.
+# - `max_missing_count`: absolute missing count threshold (optional).
+# - `sample_limit`: how many missing sample paths to include in the saved artifact.
+general:
+  manifest_check:
+    max_missing_fraction: 0.10
+    max_missing_count: 1000
+    sample_limit: 500

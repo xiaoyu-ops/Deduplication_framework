@@ -44,6 +44,18 @@ def main() -> None:
         print(f"[audio runner] failed to load config {config_path!r}: {exc}")
         raise
 
+    # Print loaded config summary to make runtime threshold explicit
+    try:
+        print(
+            f"[audio runner] loaded config={config_path!r} embedding.threshold={config.embedding.threshold} "
+            f"dedup.threshold={config.dedup.threshold} max_candidates={config.dedup.max_candidates} "
+            f"fingerprint_backend={config.embedding.fingerprint_backend} precomputed={config.embedding.precomputed_fingerprints}",
+            flush=True,
+        )
+    except Exception:
+        # Avoid crashing runner if config shape is unexpected; best-effort logging only
+        print(f"[audio runner] loaded config but failed to pretty-print values: {config_path!r}", flush=True)
+
     result: AudioPipelineResult = run_audio_pipeline(paths, config)
 
     stats = dict(result.stats)

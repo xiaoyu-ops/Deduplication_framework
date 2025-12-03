@@ -13,7 +13,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import yaml
@@ -76,6 +76,27 @@ class ImagePipelineResult:
     duplicates: List[Dict[str, object]]
     missing: List[Path]
     stats: Dict[str, object]
+
+
+def _progress_reporter(total: int, label: str, prefix: str) -> Callable[[int], None]:
+    """Create a lightweight progress reporter that prints at ~10% intervals."""
+
+    total = int(max(0, total))
+    if total <= 0:
+        return lambda _current: None
+
+    step = max(1, total // 10)
+    next_emit = step
+
+    def _report(current: int) -> None:
+        nonlocal next_emit
+        current = min(max(0, current), total)
+        if current >= next_emit or current == total:
+            percent = (current / total) * 100 if total else 100.0
+            print(f"{prefix}{label}: {current}/{total} ({percent:.1f}%)", flush=True)
+            next_emit = min(total, current + step)
+
+    return _report
 
 
 def _merge_dict(default: Dict[str, object], override: Dict[str, object]) -> Dict[str, object]:
@@ -476,6 +497,7 @@ def _deduplicate_pairwise(
 
     threshold = 1.0 - float(config.eps)
     seen: Set[int] = set()
+    progress = _progress_reporter(n, "pairwise dedup", "[image pipeline] ")
 
     for i in range(n):
         if i in seen:
@@ -498,6 +520,7 @@ def _deduplicate_pairwise(
                 }
             )
             duplicate_count += len(dup_entries)
+        progress(i + 1)
 
     return {
         "keepers": keepers,
@@ -533,7 +556,10 @@ def _deduplicate_sem_dedup(
     duplicates: List[Dict[str, object]] = []
     duplicate_count = 0
 
-    for cluster_id in sorted(cluster_members):
+    total_clusters = len(cluster_members)
+    progress = _progress_reporter(total_clusters, "legacy SemDeDup", "[image pipeline] ")
+
+    for processed, cluster_id in enumerate(sorted(cluster_members), start=1):
         member_indices = cluster_members[cluster_id]
         row_indices = [idx_to_row[idx] for idx in member_indices if idx in idx_to_row]
         if not row_indices:
@@ -586,6 +612,7 @@ def _deduplicate_sem_dedup(
                     "cluster_id": cluster_id,
                 }
             )
+        progress(processed)
 
     if not keepers and paths:
         keepers = [Path(p) for p in paths]
