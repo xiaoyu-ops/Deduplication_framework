@@ -62,6 +62,20 @@ def main() -> None:
 
     stats["missing"] = len(result.missing) + copy_stats.get("missing", 0)
 
+    # 计算输入集合的字节总量（用于上报吞吐），以 bytes 为单位
+    try:
+        processed_bytes = 0
+        for p in paths:
+            try:
+                if p.exists():
+                    processed_bytes += p.stat().st_size
+            except Exception:
+                # 忽略单个文件 stat 错误
+                continue
+        stats["processed_bytes"] = processed_bytes
+    except Exception:
+        stats.setdefault("processed_bytes", None)
+
     write_summary(output_dir, "image", stats, manifest_path, duplicates=result.duplicates)
 
     print(

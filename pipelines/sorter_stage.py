@@ -17,6 +17,9 @@ class SorterStageResult:
     per_modality: Dict[str, List[str]]
     unknown: Dict[str, List[str]]
     details: List[Dict[str, Any]]
+    per_modality_bytes: Dict[str, int]
+    unknown_bytes: Dict[str, int]
+    total_bytes: int
 
 
 def resolve_input_files(input_root: Path) -> List[str]:
@@ -61,6 +64,7 @@ def run_sorter(config: PipelineConfig, manifest_path: Path, logger) -> SorterSta
         "status",
         "target_path",
         "reason",
+        "size_bytes",
     ]
     rows: List[Dict[str, Any]] = []
     for entry in details:
@@ -71,6 +75,7 @@ def run_sorter(config: PipelineConfig, manifest_path: Path, logger) -> SorterSta
             "status": entry.get("status"),
             "target_path": entry.get("target_path"),
             "reason": entry.get("reason"),
+            "size_bytes": entry.get("size_bytes"),
         }
         rows.append(row)
 
@@ -87,9 +92,15 @@ def run_sorter(config: PipelineConfig, manifest_path: Path, logger) -> SorterSta
             "elapsed_seconds": result["elapsed_seconds"],
             "prediction_file": result.get("prediction_file"),
             "move_files": move_files,
+            "total_bytes": result.get("total_bytes", 0),
+            "per_modality_bytes": result.get("per_modality_bytes", {}),
+            "unknown_bytes": result.get("unknown_bytes", {}),
         },
         manifest_rows=rows,
         per_modality=result["categorized"],
         unknown=result["unknown"],
         details=details,
+        per_modality_bytes=result.get("per_modality_bytes", {}),
+        unknown_bytes=result.get("unknown_bytes", {}),
+        total_bytes=result.get("total_bytes", 0),
     )

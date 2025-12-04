@@ -145,6 +145,8 @@ class PipelineOrchestrator:
             except (TypeError, ZeroDivisionError, ValueError):
                 return None
 
+        BYTES_IN_MB = 1024 * 1024
+
         aggregated: Dict[str, Any] = {}
 
         sorter_info = self.summary.get("sorter_manifest") or {}
@@ -153,6 +155,7 @@ class PipelineOrchestrator:
             {},
         )
         sorter_metadata = sorter_stage.get("metadata") or {}
+        sorter_runtime = self.summary.get("sorter") or {}
         sorter_elapsed = sorter_stage.get("elapsed_seconds")
         if sorter_elapsed is None:
             sorter_elapsed = sorter_metadata.get("elapsed_seconds")
@@ -162,6 +165,23 @@ class PipelineOrchestrator:
         sorter_success = sorter_metadata.get("success_count")
         sorter_fail = sorter_metadata.get("fail_count")
         sorter_throughput = safe_div(sorter_total, sorter_elapsed)
+        sorter_bytes = sorter_metadata.get("total_bytes")
+        if sorter_bytes is None:
+            sorter_bytes = sorter_runtime.get("total_bytes")
+        per_modality_bytes = sorter_metadata.get("per_modality_bytes") or sorter_runtime.get("per_modality_bytes") or {}
+        unknown_bytes = sorter_metadata.get("unknown_bytes") or sorter_runtime.get("unknown_bytes") or {}
+        sorter_megabytes = safe_div(sorter_bytes, BYTES_IN_MB)
+        per_modality_megabytes = {
+            modality: safe_div(value, BYTES_IN_MB)
+            for modality, value in per_modality_bytes.items()
+            if isinstance(value, (int, float))
+        }
+        unknown_megabytes = {
+            category: safe_div(value, BYTES_IN_MB)
+            for category, value in unknown_bytes.items()
+            if isinstance(value, (int, float))
+        }
+        sorter_data_throughput = safe_div(sorter_megabytes, sorter_elapsed)
 
         aggregated["sorter"] = {
             "total_rows": sorter_total,
@@ -174,6 +194,13 @@ class PipelineOrchestrator:
             "files_per_second": sorter_throughput,
             "prediction_file": sorter_metadata.get("prediction_file"),
             "move_files": sorter_metadata.get("move_files"),
+            "total_bytes": sorter_bytes,
+            "total_megabytes": sorter_megabytes,
+            "megabytes_per_second": sorter_data_throughput,
+            "per_modality_bytes": per_modality_bytes,
+            "per_modality_megabytes": per_modality_megabytes,
+            "unknown_bytes": unknown_bytes,
+            "unknown_megabytes": unknown_megabytes,
         }
 
         plan = self.summary.get("modality_plan", {})
@@ -278,6 +305,9 @@ class PipelineOrchestrator:
             "modalities_elapsed_seconds": total_elapsed if total_elapsed > 0 else None,
             "modalities_files_per_second": safe_div(total_processed, total_elapsed) if total_elapsed > 0 else None,
             "stats_totals": stats_totals,
+            "total_input_bytes": sorter_bytes,
+            "total_input_megabytes": sorter_megabytes,
+            "sorter_megabytes_per_second": sorter_data_throughput,
         }
         aggregated["overall"] = overall_stats
 
@@ -1305,10 +1335,34 @@ class PipelineOrchestrator:
                 },
                 "prediction_file": result.stats.get("prediction_file"),
                 "move_files": result.stats.get("move_files"),
+                "total_bytes": result.stats.get("total_bytes"),
+                "per_modality_bytes": result.stats.get("per_modality_bytes", {}),
+                "unknown_bytes": result.stats.get("unknown_bytes", {}),
             },
         )
         self.save_stage_result(stage_name, artifact, success=True)
         self._load_manifest_snapshot(manifest_path)
+
+        sorter_bytes = {
+            "total_bytes": result.stats.get("total_bytes"),
+            "per_modality_bytes": result.stats.get("per_modality_bytes", {}),
+            "unknown_bytes": result.stats.get("unknown_bytes", {}),
+        }
+        sorter_summary = self.summary.setdefault("sorter", {})
+        sorter_summary.update(
+            {
+                "success_count": result.stats.get("success_count"),
+                "fail_count": result.stats.get("fail_count"),
+                "elapsed_seconds": result.stats.get("elapsed_seconds"),
+                **sorter_bytes,
+            }
+        )
+        sorter_manifest_summary = self.summary.get("sorter_manifest")
+        if sorter_manifest_summary:
+            sorter_manifest_summary.update(
+                {k: v for k, v in sorter_bytes.items() if v is not None}
+            )
+        self._write_run_manifest()
 
     def _submit_modality_tasks(self, tasks: List[Dict[str, Any]]) -> None:
         parallel_enabled = self.config.general.get("parallel_modalities", False)
@@ -1404,6 +1458,20 @@ class PipelineOrchestrator:
                 return f"{float(value) * 100:.{precision}f}%"
             return None
 
+        def _fmt_mb(value: Any, precision: int = 2) -> Optional[str]:
+            if isinstance(value, (int, float)):
+                return f"{float(value):.{precision}f} MB"
+            return None
+
+        def _fmt_bytes_with_mb(bytes_value: Any, mb_value: Any) -> Optional[str]:
+            if not isinstance(bytes_value, (int, float)):
+                return None
+            bytes_part = f"{int(bytes_value):,} bytes"
+            mb_part = _fmt_mb(mb_value)
+            if mb_part:
+                return f"{bytes_part} ({mb_part})"
+            return bytes_part
+
         lines = [
             f"# Pipeline Report - {self.run_id}",
             "",
@@ -1424,6 +1492,12 @@ class PipelineOrchestrator:
             inputs_str = _fmt_int(overall.get("total_inputs"))
             if inputs_str:
                 lines.append(f"- Sorter inputs: {inputs_str}")
+            bytes_line = _fmt_bytes_with_mb(
+                overall.get("total_input_bytes"),
+                overall.get("total_input_megabytes"),
+            )
+            if bytes_line:
+                lines.append(f"- Input volume: {bytes_line}")
             enabled_str = _fmt_int(overall.get("modalities_enabled"))
             if enabled_str:
                 lines.append(f"- Modalities enabled: {enabled_str}")
@@ -1439,6 +1513,9 @@ class PipelineOrchestrator:
                 lines.append(
                     f"- Modalities throughput: {throughput:.2f} files/s over {duration:.2f}s"
                 )
+            sorter_mb_rate = overall.get("sorter_megabytes_per_second")
+            if isinstance(sorter_mb_rate, (int, float)):
+                lines.append(f"- Sorter data throughput: {sorter_mb_rate:.2f} MB/s")
             stats_totals = overall.get("stats_totals") or {}
             if stats_totals:
                 lines.append("- Aggregate dedup stats:")
@@ -1470,6 +1547,12 @@ class PipelineOrchestrator:
             total_rows = sorter_info.get("total_rows")
             if total_rows is not None:
                 lines.append(f"- Total inputs: {total_rows}")
+            bytes_line = _fmt_bytes_with_mb(
+                sorter_info.get("total_bytes"),
+                sorter_info.get("total_megabytes"),
+            )
+            if bytes_line:
+                lines.append(f"- Input volume: {bytes_line}")
             manifest_path = sorter_info.get("manifest_path")
             if manifest_path:
                 lines.append(f"- Manifest: `{manifest_path}`")
@@ -1479,6 +1562,9 @@ class PipelineOrchestrator:
             throughput = sorter_info.get("files_per_second")
             if isinstance(throughput, (int, float)):
                 lines.append(f"- Throughput: {throughput:.2f} files/s")
+            data_throughput = sorter_info.get("megabytes_per_second")
+            if isinstance(data_throughput, (int, float)):
+                lines.append(f"- Data throughput: {data_throughput:.2f} MB/s")
             success = sorter_info.get("success_count")
             fail = sorter_info.get("fail_count")
             if success is not None or fail is not None:
@@ -1499,11 +1585,27 @@ class PipelineOrchestrator:
                 lines.append("- Per-modality counts:")
                 for modality, count in sorted(per_modality.items()):
                     lines.append(f"  - {modality}: {count}")
+            per_modality_bytes = sorter_info.get("per_modality_bytes", {})
+            per_modality_mb = sorter_info.get("per_modality_megabytes", {})
+            if per_modality_bytes:
+                lines.append("- Per-modality volume:")
+                for modality, value in sorted(per_modality_bytes.items()):
+                    volume_line = _fmt_bytes_with_mb(value, per_modality_mb.get(modality))
+                    if volume_line:
+                        lines.append(f"  - {modality}: {volume_line}")
             unknown_counts = sorter_info.get("unknown_counts", {})
             if unknown_counts:
                 lines.append("- Unknown categories:")
                 for category, count in sorted(unknown_counts.items()):
                     lines.append(f"  - {category}: {count}")
+            unknown_bytes = sorter_info.get("unknown_bytes", {})
+            unknown_megabytes = sorter_info.get("unknown_megabytes", {})
+            if unknown_bytes:
+                lines.append("- Unknown volume:")
+                for category, value in sorted(unknown_bytes.items()):
+                    volume_line = _fmt_bytes_with_mb(value, unknown_megabytes.get(category))
+                    if volume_line:
+                        lines.append(f"  - {category}: {volume_line}")
 
         stages = self.summary.get("stages", [])
         if stages:

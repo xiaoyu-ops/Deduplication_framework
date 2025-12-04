@@ -1,0 +1,153 @@
+# 全局通用设置：输入/输出/临时目录与断点续跑开关
+general:
+  # 数据所在根目录（要处理的原始媒体/文件集合）
+  input_root: D:/桌面/Deduplication_Framework/mix_dataset # 待处理数据所在目录
+  # 全局输出根目录，所有模态的输出和最终报告都写到该目录下的子目录
+  output_root: D:/桌面/Deduplication_Framework/outputs/big_run # 各模态输出与报告目录
+  # Orchestrator 用于存放阶段 artifacts（manifest、logs、_LOCK 等）的临时目录
+  temp_root: D:/桌面/Deduplication_Framework/artifacts/big_run # Orchestrator 产生的阶段日志/状态目录
+  # 启用断点续跑。为 true 时，Orchestrator 会检查已有阶段产物并尽量跳过已完成的阶段
+  resume: true # 是否启用断点续跑（大规模运行建议开启）
+  # 是否允许同时并发运行多个模态（image/audio/text）阶段
+  parallel_modalities: true
+  # 全局并行 worker 数（按机器资源调整，建议 4-12）。Orchestrator 会把任务分配到这些 worker
+  parallel_workers: 3
+  # 用于将 manifest 划分为多个批次的大小；较大值可减少调度开销但增加单次处理时占用资源
+  batch_size: 2000
+
+# 全局日志与网络健壮性设置（大规模下载/远程请求时有用）
+logging:
+  # 日志级别（DEBUG, INFO, WARNING, ERROR）——影响控制台与文件的详细程度
+  level: INFO
+  # 全局日志文件路径（Orchestrator 会把关键信息写入此文件）
+  file: D:/桌面/Deduplication_Framework/logs/big_run.log
+
+network:
+  # HTTP 读取超时（秒），用于网络下载请求
+  http_read_timeout_seconds: 30
+  # 网络请求失败时重试次数
+  retries: 5
+  # 重试退避的基础时间（秒），实际退避可按指数增长实现
+  backoff_factor_seconds: 1
+
+# 执行器配置：指定本地执行与各阶段使用的 Conda 环境
+executor:
+  # 可选值：local / remote 等。当前配置使用本地执行器
+  type: local
+  # 本地 conda 可执行文件路径（用于在不同环境间切换）。请根据你的机器修改为实际路径
+  conda_executable: C:/Users/sysu/anaconda3/Scripts/conda.exe # 根据实际路径修改
+  # 每个阶段执行时使用的 conda 环境名称（必须已存在并包含所需依赖）
+  envs:
+    # 排序阶段（负责扫描文件、生成 manifest）的 Conda 环境名称
+    sorter: Deplication_Framework # 排序阶段使用的环境名称
+    # 图像处理阶段所在环境（应包含 Pillow / numpy / image 依赖）
+    image: image # 图像阶段环境（已安装图像依赖）
+    # 音频处理阶段所在环境（应包含 soundfile / ffmpeg/指纹库等）
+    audio: audio # 音频阶段环境（含指纹依赖/ffmpeg）
+    # 文本处理阶段所在环境（可包含 nltk / scikit-learn 等）
+    text: text-dedup # 文本阶段环境
+
+# 数据质量 / 注入不可用文件（用于模拟损坏样本）
+data_quality:
+  # 是否把预先生成的“不可用二进制”样本（用来模拟损坏文件）纳入排序与处理
+  include_unusable_bins: true
+  # 不可用二进制样本存放路径（当 include_unusable_bins 为 true 时使用）
+  unusable_bins_path: D:/桌面/Deduplication_framework/mix_dataset/unusable_bins
+
+# 排序阶段：生成 manifest 并统计模态分布
+sorter:
+  # 启用/禁用排序阶段（若 false，Orchestrator 会跳过该阶段并期待预先存在的 manifest）
+  enabled: true
+  # 生成的 manifest 文件名（位于 temp_root/<<runid>>/stage1_sorter/ 下）
+  manifest_name: manifest.csv
+  # 用于分批扫描/写入 manifest 的批量大小（与 general.batch_size 保持一致或合理配合）
+  batch_size: 2000
+  # 是否把文件实际移动到项目内部的 dataset 目录（默认为 false，仅生成 manifest）
+  move_files: false # 为 true 时会把文件移动到项目内 dataset 目录
+
+# 图像模态：使用轻量 average_rgb 后端避免下载大型模型
+image:
+  # 是否启用图像模态处理（提取 embedding / 去重等）
+  enabled: true
+  # 该模态在 Orchestrator 中被以子进程方式调用的可执行脚本路径
+  entrypoint: D:/桌面/Deduplication_framework/pipelines/modalities/image_runner.py
+  # 运行该 entrypoint 时的工作目录（通常为项目根或 runner 所期望的路径）
+  workdir: .
+  # 图像阶段的输出目录（也可改为基于 general.output_root 的相对子目录）
+  output_dir: D:/桌面/Deduplication_Framework/outputs/big_run/image
+  # 传递给 entrypoint 的额外命令行参数（列表形式，由 Orchestrator 转换）
+  args: []
+  env:
+    PYTHONIOENCODING: utf-8
+    PYTHONUNBUFFERED: "1"
+  # 指向单独的 image 配置文件路径（画像器/去重后端等具体设置在该文件中）
+  config_file: D:/桌面/Deduplication_framework/configs/image_config.yaml
+  # 大规模运行时图像处理的并发与批次参数
+  batch_size: 2000
+  max_workers: 3
+  # 明确指定 orchestrator 用于分片的子 manifest 大小（优先级高于 general.batch_size）
+  manifest_subset_count: 2000
+  # 每处理多少条结果就 flush（写磁盘/上传等），避免内存占用过高
+  flush_interval: 100
+
+# 音频模态：默认使用预计算指纹，避免在测试时安装/调用重型依赖
+audio:
+  # 是否启用音频模态处理
+  enabled: true
+  # 音频 runner 的入口脚本路径
+  entrypoint: D:/桌面/Deduplication_framework/pipelines/modalities/audio_runner.py
+  workdir: .
+  # 音频阶段输出目录
+  output_dir: D:/桌面/Deduplication_Framework/outputs/big_run/audio
+  args: []
+  # 运行时环境变量（会在调用 entrypoint 时注入），此处设置 Python 输出编码以避免编码问题
+  env:
+    PYTHONIOENCODING: utf-8
+    PYTHONUNBUFFERED: "1"
+  # 指向单独的 audio 配置文件，避免嵌入式 YAML 在调度时丢失
+  config_file: D:/桌面/Deduplication_Framework/configs/audio_override.yaml
+  # audio-specific processing knobs
+  # 分批处理大小（每个任务单元包含的文件数量）
+  batch_size: 500
+  # 明确指定 orchestrator 用于分片的子 manifest 大小（优先级高于 general.batch_size）
+  manifest_subset_count: 500
+  # 最大并发 worker 数（在本地环境中根据 CPU/IO 调整）
+  max_workers: 4
+  # 当解码出现错误时是否重试（对不完整或损坏的音频有用）
+  retry_on_decode_error: true
+  # 解码重试次数上限
+  decode_retry_limit: 3
+
+# 文本模态：默认使用 3-gram + Jaccard 去重
+text:
+  # 是否启用文本模态处理
+  enabled: true
+  # 文本 runner 的入口脚本路径
+  entrypoint: D:/桌面/Deduplication_framework/pipelines/modalities/text_runner.py
+  workdir: .
+  # 文本阶段输出目录
+  output_dir: D:/桌面/Deduplication_Framework/outputs/big_run/text
+  args: []
+  env:
+    PYTHONIOENCODING: utf-8
+    PYTHONUNBUFFERED: "1"
+  # 指向单独的文本配置文件（比起嵌入式 YAML 更可靠地被 runner 读取）
+  config_file: D:/桌面/Deduplication_Framework/configs/text_override.yaml
+  # 文本处理的批次与并发控制
+  batch_size: 2000
+  max_workers: 4
+  # 多少条处理后就 flush（写盘/持久化）
+  flush_interval: 200
+  # 当候选数超过 max_candidates 时，文本去重回退到滚动窗口比较，窗口大小
+  window_size: 500
+
+# 汇总阶段输出：JSON 与 Markdown 报告
+report:
+  # 汇总 JSON 文件（包含每个阶段统计与汇总结果）
+  summary_file: D:/桌面/Deduplication_Framework/outputs/big_run/summary.json
+  # 可读性的 Markdown 报告路径
+  markdown_file: D:/桌面/Deduplication_Framework/outputs/big_run/report.md
+  # 是否保存中间产物（每个阶段的中间结果），便于调试与审计
+  save_intermediate: true
+  # 保存中间产物的目录
+  intermediate_dir: D:/桌面/Deduplication_Framework/outputs/big_run/intermediate

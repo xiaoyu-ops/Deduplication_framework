@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 
 def read_files_from_directory(directory: str):
-    """递归读取目录下的所有文件路径"""
+    """Recursively collect every file path within a directory."""
     all_files = []
     for root, _, files in os.walk(directory):
         for file in files:
@@ -22,7 +22,7 @@ def read_files_from_directory(directory: str):
     return all_files
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
-# 运行流水线时仅允许以下扩展进入 image 阶段，其他即便被 heuristics 识别也强制标记为 unknown。
+# Only allow these extensions to enter the image pipeline during runs; everything else is forced to unknown
 STRICT_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 STRICT_AUDIO_EXTS = {".wav"}
 AUDIO_EXTS = {".wav", ".mp3", ".aac", ".flac", ".ogg", ".m4a", ".wma"}
@@ -58,19 +58,19 @@ def safe_move_file(src_path: str, dst_path: str, max_retries: int = 3) -> Option
                 counter += 1
 
             shutil.move(src_path, candidate)
-            print(f"已将文件 {src_path} 移动到 {candidate}")
+            print(f"Moved file {src_path} to {candidate}")
             return candidate
 
         except PermissionError:
-            print(f"文件被占用，尝试 {attempt + 1}/{max_retries}: {src_path}")
+            print(f"File locked, retry {attempt + 1}/{max_retries}: {src_path}")
             if attempt < max_retries - 1:
                 time.sleep(1)
             else:
-                print(f"文件移动失败，可能被其他程序占用: {src_path}")
-                print("请关闭可能占用该文件的程序如VSCode、记事本等")
+                print(f"File move failed; it may be in use: {src_path}")
+                print("Close any program that might lock the file, e.g., VS Code or Notepad")
                 return None
         except Exception as exc:  # pragma: no cover
-            print(f"移动文件时出现未知错误: {exc}")
+            print(f"Unexpected error while moving file: {exc}")
             return None
     return None
 
@@ -277,25 +277,28 @@ def sorter(
     move_base_dir: Optional[str] = None,
     collect_only: bool = False,
 ):
-    """根据文件内容将其分类为 audio/image/text。
+    """Classify files into audio/image/text based on content.
 
     Args:
-        files: 可迭代的文件路径集合。
-        eval_mode: 评估模式，仅统计不移动文件。
-        prediction_path: 可选，输出预测 CSV。
-        input_root: 生成相对路径时使用的根目录。
-        move_base_dir: 若提供，则把文件移动到指定目录下的对应模态 dataset/ 中。
-        collect_only: 为 True 时不执行移动，只收集分类结果并返回。
+        files: Iterable of file paths to classify.
+        eval_mode: When True, only report stats/predictions without moving files.
+        prediction_path: Optional CSV path for predictions in eval mode.
+        input_root: Root directory used to compute relative paths.
+        move_base_dir: Destination root where files are moved by modality when enabled.
+        collect_only: When True, skip moves and only collect classification results.
 
     Returns:
-        dict: 包含统计信息、分类结果（categorized）与未支持类别（unknown）。
+        dict: Statistics plus categorized and unknown entries with detail records.
     """
 
     start_time = time.time()
     success_count = 0
     fail_count = 0
     categorized: Dict[str, List[str]] = {"image": [], "audio": [], "text": []}
+    categorized_bytes: Dict[str, int] = {"image": 0, "audio": 0, "text": 0}
     other_categories: Dict[str, List[str]] = {}
+    other_bytes: Dict[str, int] = {}
+    total_bytes = 0
     details: List[Dict[str, Any]] = []
 
     prediction_writer = None
@@ -321,9 +324,17 @@ def sorter(
             return
         prediction_writer.writerow([resolve_relative(path), label])
 
-    iterator = tqdm(files, desc="分类进度") if not eval_mode else files
+    # 使用中文描述并在 Windows 终端避免 Unicode 进度条乱码（使用 ASCII 样式）
+    iterator = tqdm(files, desc="分类中", ascii=True) if not eval_mode else files
 
     for file_path in iterator:
+        size_bytes = 0
+        try:
+            size_bytes = os.path.getsize(file_path)
+        except OSError:
+            size_bytes = 0
+        total_bytes += size_bytes
+
         try:
             category = determine_category(file_path)
             suffix = Path(file_path).suffix.lower()
@@ -332,7 +343,7 @@ def sorter(
             if category == "audio" and suffix not in STRICT_AUDIO_EXTS:
                 category = "unknown"
         except Exception as exc:
-            print(f"处理文件 {file_path} 时出错: {exc}")
+            print(f"Error while processing {file_path}: {exc}")
             fail_count += 1
             write_prediction(file_path, "error")
             details.append(
@@ -357,6 +368,7 @@ def sorter(
             "status": None,
             "target_path": None,
             "reason": None,
+            "size_bytes": size_bytes,
         }
 
         if eval_mode:
@@ -372,6 +384,7 @@ def sorter(
 
         if is_supported:
             categorized[category].append(abs_path)
+            categorized_bytes[category] += size_bytes
             if not collect_only:
                 moved_path = put_file_in_category(file_path, category, base_dir=move_base_dir)
                 if moved_path:
@@ -387,7 +400,8 @@ def sorter(
                 detail_entry["status"] = "collected"
         else:
             other_categories.setdefault(category, []).append(os.path.abspath(file_path))
-            print(f"无法归类文件 {file_path}，预测为 {category}")
+            other_bytes[category] = other_bytes.get(category, 0) + size_bytes
+            print(f"Could not categorize {file_path}; predicted {category}")
             fail_count += 1
             detail_entry["status"] = "unknown"
             detail_entry["reason"] = category
@@ -402,9 +416,9 @@ def sorter(
 
     elapsed = time.time() - start_time
     print("\n分类完成")
-    print(f"成功处理: {success_count} 个文件")
-    print(f"失败/跳过: {fail_count} 个文件")
-    print(f"总耗时: {elapsed:.2f} 秒")
+    print(f"成功: {success_count} 文件")
+    print(f"失败/跳过: {fail_count} 文件")
+    print(f"耗时: {elapsed:.2f} 秒")
 
     return {
         "success_count": success_count,
@@ -412,29 +426,36 @@ def sorter(
         "elapsed_seconds": elapsed,
         "categorized": categorized,
         "unknown": other_categories,
+        "per_modality_bytes": categorized_bytes,
+        "unknown_bytes": other_bytes,
+        "total_bytes": total_bytes,
         "details": details,
         "prediction_file": str(prediction_path.resolve()) if prediction_path else None,
     }
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="对 mix_dataset 进行分类或评估")
-    parser.add_argument("--input", default="./mix_dataset", help="要分类的输入目录")
-    parser.add_argument("--eval", action="store_true", help="启用评估模式，不移动文件，只输出预测")
-    parser.add_argument("--predictions", help="评估模式下保存预测结果的 CSV 路径")
-    parser.add_argument("--input-root", help="预测路径的相对根目录，默认等于 --input")
-    parser.add_argument("--move-base", help="实际移动文件时的目标根目录")
+    parser = argparse.ArgumentParser(description="Classify or evaluate the mix_dataset inputs")
+    parser.add_argument("--input", default="./mix_dataset", help="Input directory to classify")
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="Enable evaluation mode (no file moves, only predictions)",
+    )
+    parser.add_argument("--predictions", help="CSV path to save predictions in eval mode")
+    parser.add_argument("--input-root", help="Root directory used for relative paths (defaults to --input)")
+    parser.add_argument("--move-base", help="Destination root when moving files in non-eval mode")
 
     args = parser.parse_args()
 
     input_directory = args.input
     files = read_files_from_directory(input_directory)
-    print(f"找到 {len(files)} 个文件")
+    print(f"Found {len(files)} files")
 
     if not files:
-        print("没有找到文件")
+        print("No files found")
         raise SystemExit(0)
 
-    print("前10个文件:")
+    print("前 10 个文件:")
     for i, f in enumerate(files[:10]):
         print(f"  {i+1}. {f}")
 
@@ -454,14 +475,14 @@ if __name__ == "__main__":
     )
 
     if args.eval:
-        print("评估模式已完成")
+        print("Evaluation mode completed")
     else:
-        print("分类操作完成")
+        print("Classification run completed")
 
     if prediction_path:
-        print(f"预测结果已保存到: {Path(prediction_path).resolve()}")
+        print(f"Predictions saved to: {Path(prediction_path).resolve()}")
 
     print(
-        f"统计: success={result['success_count']} fail={result['fail_count']} "
+        f"Stats: success={result['success_count']} fail={result['fail_count']} "
         f"elapsed={result['elapsed_seconds']:.2f}s"
     )
