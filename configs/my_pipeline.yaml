@@ -11,7 +11,7 @@ general:
   # 是否允许同时并发运行多个模态（image/audio/text）阶段
   parallel_modalities: true
   # 全局并行 worker 数（按机器资源调整，建议 4-12）。Orchestrator 会把任务分配到这些 worker
-  parallel_workers: 3
+  parallel_workers: 28
   # 用于将 manifest 划分为多个批次的大小；较大值可减少调度开销但增加单次处理时占用资源
   batch_size: 2000
 
@@ -84,11 +84,11 @@ image:
   config_file: D:/桌面/Deduplication_framework/configs/image_config.yaml
   # 大规模运行时图像处理的并发与批次参数
   batch_size: 2000
-  max_workers: 3
+  max_workers: 28
   # 明确指定 orchestrator 用于分片的子 manifest 大小（优先级高于 general.batch_size）
   manifest_subset_count: 2000
   # 每处理多少条结果就 flush（写磁盘/上传等），避免内存占用过高
-  flush_interval: 100
+  flush_interval: 500
 
 # 音频模态：默认使用预计算指纹，避免在测试时安装/调用重型依赖
 audio:
@@ -108,11 +108,11 @@ audio:
   config_file: D:/桌面/Deduplication_Framework/configs/audio_override.yaml
   # audio-specific processing knobs
   # 分批处理大小（每个任务单元包含的文件数量）
-  batch_size: 500
+  batch_size: 1000
   # 明确指定 orchestrator 用于分片的子 manifest 大小（优先级高于 general.batch_size）
   manifest_subset_count: 500
   # 最大并发 worker 数（在本地环境中根据 CPU/IO 调整）
-  max_workers: 4
+  max_workers: 28
   # 当解码出现错误时是否重试（对不完整或损坏的音频有用）
   retry_on_decode_error: true
   # 解码重试次数上限
@@ -135,11 +135,11 @@ text:
   config_file: D:/桌面/Deduplication_Framework/configs/text_override.yaml
   # 文本处理的批次与并发控制
   batch_size: 2000
-  max_workers: 4
+  max_workers: 28
   # 多少条处理后就 flush（写盘/持久化）
-  flush_interval: 200
+  flush_interval: 500
   # 当候选数超过 max_candidates 时，文本去重回退到滚动窗口比较，窗口大小
-  window_size: 500
+  window_size: 1000
 
 # 汇总阶段输出：JSON 与 Markdown 报告
 report:

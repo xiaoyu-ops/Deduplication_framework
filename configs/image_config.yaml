@@ -5,7 +5,7 @@ embedding:
   # 当使用深度模型时，指定模型的标识（示例为 HF hub 上的 CLIP 模型）
   model_name: hf-hub:laion/CLIP-ViT-B-16-laion2B-s34B-b88K
   # 内部处理批次大小。较大 batch 可提高吞吐但增加显存使用
-  batch_size: 8
+  batch_size: 256
   # 设备选择：'cpu' / 'cuda' / 'auto'（auto 会在有可用 GPU 时使用 GPU）
   device: auto
   # 如果指定的后端不可用或失败，回退到的后端实现
