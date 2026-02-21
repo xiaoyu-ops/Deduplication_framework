@@ -1,11 +1,11 @@
 # 全局通用设置：输入/输出/临时目录与断点续跑开关
 general:
   # 数据所在根目录（要处理的原始媒体/文件集合）
-  input_root: D:/桌面/Deduplication_Framework/mix_dataset # 待处理数据所在目录
+  input_root: D:/Deduplication_Framework/mix_dataset # 待处理数据所在目录
   # 全局输出根目录，所有模态的输出和最终报告都写到该目录下的子目录
-  output_root: D:/桌面/Deduplication_Framework/outputs/big_run # 各模态输出与报告目录
+  output_root: D:/Deduplication_Framework/outputs/big_run # 各模态输出与报告目录
   # Orchestrator 用于存放阶段 artifacts（manifest、logs、_LOCK 等）的临时目录
-  temp_root: D:/桌面/Deduplication_Framework/artifacts/big_run # Orchestrator 产生的阶段日志/状态目录
+  temp_root: D:/Deduplication_Framework/artifacts/big_run # Orchestrator 产生的阶段日志/状态目录
   # 启用断点续跑。为 true 时，Orchestrator 会检查已有阶段产物并尽量跳过已完成的阶段
   resume: true # 是否启用断点续跑（大规模运行建议开启）
   # 是否允许同时并发运行多个模态（image/audio/text）阶段
@@ -20,7 +20,7 @@ logging:
   # 日志级别（DEBUG, INFO, WARNING, ERROR）——影响控制台与文件的详细程度
   level: INFO
   # 全局日志文件路径（Orchestrator 会把关键信息写入此文件）
-  file: D:/桌面/Deduplication_Framework/logs/big_run.log
+  file: D:/Deduplication_Framework/logs/big_run.log
 
 network:
   # HTTP 读取超时（秒），用于网络下载请求
@@ -52,7 +52,7 @@ data_quality:
   # 是否把预先生成的“不可用二进制”样本（用来模拟损坏文件）纳入排序与处理
   include_unusable_bins: true
   # 不可用二进制样本存放路径（当 include_unusable_bins 为 true 时使用）
-  unusable_bins_path: D:/桌面/Deduplication_framework/mix_dataset/unusable_bins
+  unusable_bins_path: D:/Deduplication_framework/mix_dataset/unusable_bins
 
 # 排序阶段：生成 manifest 并统计模态分布
 sorter:
@@ -70,18 +70,18 @@ image:
   # 是否启用图像模态处理（提取 embedding / 去重等）
   enabled: true
   # 该模态在 Orchestrator 中被以子进程方式调用的可执行脚本路径
-  entrypoint: D:/桌面/Deduplication_framework/pipelines/modalities/image_runner.py
+  entrypoint: D:/Deduplication_framework/pipelines/modalities/image_runner.py
   # 运行该 entrypoint 时的工作目录（通常为项目根或 runner 所期望的路径）
   workdir: .
   # 图像阶段的输出目录（也可改为基于 general.output_root 的相对子目录）
-  output_dir: D:/桌面/Deduplication_Framework/outputs/big_run/image
+  output_dir: D:/Deduplication_Framework/outputs/big_run/image
   # 传递给 entrypoint 的额外命令行参数（列表形式，由 Orchestrator 转换）
   args: []
   env:
     PYTHONIOENCODING: utf-8
     PYTHONUNBUFFERED: "1"
   # 指向单独的 image 配置文件路径（画像器/去重后端等具体设置在该文件中）
-  config_file: D:/桌面/Deduplication_framework/configs/image_config.yaml
+  config_file: D:/Deduplication_framework/configs/image_config.yaml
   # 大规模运行时图像处理的并发与批次参数
   batch_size: 2000
   max_workers: 3
@@ -95,17 +95,17 @@ audio:
   # 是否启用音频模态处理
   enabled: true
   # 音频 runner 的入口脚本路径
-  entrypoint: D:/桌面/Deduplication_framework/pipelines/modalities/audio_runner.py
+  entrypoint: D:/Deduplication_framework/pipelines/modalities/audio_runner.py
   workdir: .
   # 音频阶段输出目录
-  output_dir: D:/桌面/Deduplication_Framework/outputs/big_run/audio
+  output_dir: D:/Deduplication_Framework/outputs/big_run/audio
   args: []
   # 运行时环境变量（会在调用 entrypoint 时注入），此处设置 Python 输出编码以避免编码问题
   env:
     PYTHONIOENCODING: utf-8
     PYTHONUNBUFFERED: "1"
   # 指向单独的 audio 配置文件，避免嵌入式 YAML 在调度时丢失
-  config_file: D:/桌面/Deduplication_Framework/configs/audio_override.yaml
+  config_file: D:/Deduplication_Framework/configs/audio_override.yaml
   # audio-specific processing knobs
   # 分批处理大小（每个任务单元包含的文件数量）
   batch_size: 500
@@ -123,16 +123,16 @@ text:
   # 是否启用文本模态处理
   enabled: true
   # 文本 runner 的入口脚本路径
-  entrypoint: D:/桌面/Deduplication_framework/pipelines/modalities/text_runner.py
+  entrypoint: D:/Deduplication_framework/pipelines/modalities/text_runner.py
   workdir: .
   # 文本阶段输出目录
-  output_dir: D:/桌面/Deduplication_Framework/outputs/big_run/text
+  output_dir: D:/Deduplication_Framework/outputs/big_run/text
   args: []
   env:
     PYTHONIOENCODING: utf-8
     PYTHONUNBUFFERED: "1"
   # 指向单独的文本配置文件（比起嵌入式 YAML 更可靠地被 runner 读取）
-  config_file: D:/桌面/Deduplication_Framework/configs/text_override.yaml
+  config_file: D:/Deduplication_Framework/configs/text_override.yaml
   # 文本处理的批次与并发控制
   batch_size: 2000
   max_workers: 4
@@ -144,10 +144,10 @@ text:
 # 汇总阶段输出：JSON 与 Markdown 报告
 report:
   # 汇总 JSON 文件（包含每个阶段统计与汇总结果）
-  summary_file: D:/桌面/Deduplication_Framework/outputs/big_run/summary.json
+  summary_file: D:/Deduplication_Framework/outputs/big_run/summary.json
   # 可读性的 Markdown 报告路径
-  markdown_file: D:/桌面/Deduplication_Framework/outputs/big_run/report.md
+  markdown_file: D:/Deduplication_Framework/outputs/big_run/report.md
   # 是否保存中间产物（每个阶段的中间结果），便于调试与审计
   save_intermediate: true
   # 保存中间产物的目录
-  intermediate_dir: D:/桌面/Deduplication_Framework/outputs/big_run/intermediate
+  intermediate_dir: D:/Deduplication_Framework/outputs/big_run/intermediate

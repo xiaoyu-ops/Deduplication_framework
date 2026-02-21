@@ -12,8 +12,10 @@ embedding:
   fallback: average_rgb
   # Embeddings 保存目录（当前指向旧的 outputs/test_run/embeddings，请考虑替换为基于 general.output_root 的路径）
   # Embedding 输出目录（改为 big_run 路径，避免写入旧的 test_run 目录）
-  save_embeddings_dir: D:/桌面/Deduplication_Framework/outputs/big_run/embeddings
+  save_embeddings_dir: D:/Deduplication_framework/2026_new_experiment/result_full_global/embeddings
   # Embeddings 保存目录（可选），但不使用 precomputed 复用，pipeline 将在线计算 embeddings
+  precomputed_embeddings: null
+  precomputed_index: null
 
 dedup:
   # 去重方法；可选 'pairwise' / 'semdedup'（legacy）/ 'clustering' 等。
@@ -24,9 +26,9 @@ dedup:
   # 可作为回退或 pairwise 时的阈值）。
   eps: 0.15
   # legacy SemDeDup 相关文件（如果存在），pipeline 会优先尝试读取这些
-  # 产物并直接复用保留索引以避免重新计算大规模嵌入/聚类。请根据本地路径
-  # 调整下列项。下面是本仓库中发现的示例位置：
-  legacy_keep_indices_file: D:/桌面/Deduplication_Framework/image/clustering/semdedup_result/eps_0.15/all_kept_samples.txt
-  legacy_cluster_dir: D:/桌面/Deduplication_Framework/image/clustering/results/ncentroids_2000/sorted_clusters
+  # 产物并直接复用保留索引以避免重新计算大规模嵌入/聚类。
+  # 设置为 null 以强制重新计算。
+  legacy_keep_indices_file: null
+  legacy_cluster_dir: null
   # 在执行 pairwise 或其他方法时用于限制候选数的上限
   max_candidates: 50000

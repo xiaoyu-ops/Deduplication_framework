@@ -1,5 +1,5 @@
 mix_dataset
-
+2026_new_experiment
 # 不保存的文件类型
 *.log
 *.tmp
@@ -35,3 +35,7 @@ mix_dataset
 artifacts
 outputs
 tests
+test_dataset
+*.yaml
+*.jsonl
+*.txt

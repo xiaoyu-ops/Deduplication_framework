@@ -3,9 +3,10 @@ embedding:
   threshold: 0.75
 
 dedup:
-  method: lsh
+  method: phash
   threshold: 0.75
   max_candidates: 50000
+  mfcc_threshold: 0.95
 
 # Orchestrator-level manifest accessibility check settings.
 # These keys are read by the orchestrator from `general.manifest_check` if present.

@@ -16,9 +16,28 @@ from tqdm import tqdm
 def read_files_from_directory(directory: str):
     """Recursively collect every file path within a directory."""
     all_files = []
+    print(f"[Sorter] Start scanning directory: {directory}")
+    # Try to use tqdm if available, otherwise silent or print
+    try:
+        from tqdm import tqdm
+        pbar = tqdm(desc="Scanning files", unit="file")
+    except ImportError:
+        pbar = None
+
+    count = 0
     for root, _, files in os.walk(directory):
         for file in files:
             all_files.append(os.path.join(root, file))
+            if pbar is not None:
+                pbar.update(1)
+            else:
+                count += 1
+                if count % 10000 == 0:
+                    print(f"Scanned {count} files...", end='\r')
+    
+    if pbar is not None:
+        pbar.close()
+    print(f"\n[Sorter] Scan complete. Found {len(all_files)} files.")
     return all_files
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
@@ -188,6 +207,15 @@ def classify_json_file(file_path: str) -> Optional[str]:
 
 
 def determine_category(file_path: str) -> str:
+    suffix = Path(file_path).suffix.lower()
+
+    # [Optimization] Fast Path: Skip file I/O for trusted extensions
+    # Significantly speeds up scanning for massive datasets (e.g. ImageNet)
+    if suffix in STRICT_IMAGE_EXTS:
+        return "image"
+    if suffix in STRICT_AUDIO_EXTS:
+        return "audio"
+
     try:
         size = os.path.getsize(file_path)
     except OSError:
@@ -196,7 +224,6 @@ def determine_category(file_path: str) -> str:
     if size == 0:
         return "unknown"
 
-    suffix = Path(file_path).suffix.lower()
     header = read_header(file_path)
     magic = sniff_magic(header)
 
@@ -268,6 +295,48 @@ def determine_category(file_path: str) -> str:
     return "unknown"
 
 
+if __name__ == "__main__":
+    from concurrent.futures import ThreadPoolExecutor
+    import multiprocessing
+
+def _worker_classify_batch(files_batch):
+    """Helper function for parallel execution of a batch of files."""
+    results = []
+    for file_path in files_batch:
+        try:
+            size_bytes = 0
+            try:
+                size_bytes = os.path.getsize(file_path)
+            except OSError:
+                size_bytes = 0
+
+            category = determine_category(file_path)
+            suffix = Path(file_path).suffix.lower()
+            
+            # Strict checks for specific types
+            if category == "image" and suffix not in STRICT_IMAGE_EXTS:
+                category = "unknown"
+            if category == "audio" and suffix not in STRICT_AUDIO_EXTS:
+                category = "unknown"
+            
+            results.append({
+                "file_path": file_path,
+                "category": category,
+                "size_bytes": size_bytes,
+                "reason": None,
+                "status": None
+            })
+
+        except Exception as exc:
+            results.append({
+                "file_path": file_path,
+                "category": "error",
+                "size_bytes": 0,
+                "reason": str(exc),
+                "status": "error"
+            })
+    return results
+
 def sorter(
     files,
     *,
@@ -276,6 +345,7 @@ def sorter(
     input_root: Optional[str] = None,
     move_base_dir: Optional[str] = None,
     collect_only: bool = False,
+    num_workers: int = 16 # Default parallel workers
 ):
     """Classify files into audio/image/text based on content.
 
@@ -286,10 +356,12 @@ def sorter(
         input_root: Root directory used to compute relative paths.
         move_base_dir: Destination root where files are moved by modality when enabled.
         collect_only: When True, skip moves and only collect classification results.
+        num_workers: Number of threads to use for classification.
 
     Returns:
         dict: Statistics plus categorized and unknown entries with detail records.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     start_time = time.time()
     success_count = 0
@@ -318,112 +390,134 @@ def sorter(
             except ValueError:
                 pass
         return path.replace("\\", "/")
-
+    
     def write_prediction(path: str, label: str) -> None:
         if prediction_writer is None:
             return
         prediction_writer.writerow([resolve_relative(path), label])
 
-    # 使用中文描述并在 Windows 终端避免 Unicode 进度条乱码（使用 ASCII 样式）
-    iterator = tqdm(files, desc="分类中", ascii=True) if not eval_mode else files
+    # Convert potentially lazy iterator to list for length
+    files_list = list(files)
+    total_files = len(files_list)
+    
+    # Chunk the files list to reduce Future overhead (3.8M tasks -> ~3.8k tasks)
+    chunk_size = 1000
+    file_chunks = [files_list[i:i + chunk_size] for i in range(0, total_files, chunk_size)]
+    
+    print(f"[Sorter] Processing {total_files} files with {num_workers} threads in {len(file_chunks)} batches...")
+    
+    # Use tqdm for progress tracking
+    pbar = tqdm(total=total_files, desc="分类中", ascii=True)
 
-    for file_path in iterator:
-        size_bytes = 0
-        try:
-            size_bytes = os.path.getsize(file_path)
-        except OSError:
-            size_bytes = 0
-        total_bytes += size_bytes
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(_worker_classify_batch, chunk): chunk for chunk in file_chunks}
 
-        try:
-            category = determine_category(file_path)
-            suffix = Path(file_path).suffix.lower()
-            if category == "image" and suffix not in STRICT_IMAGE_EXTS:
-                category = "unknown"
-            if category == "audio" and suffix not in STRICT_AUDIO_EXTS:
-                category = "unknown"
-        except Exception as exc:
-            print(f"Error while processing {file_path}: {exc}")
-            fail_count += 1
-            write_prediction(file_path, "error")
-            details.append(
-                {
-                    "source_path": os.path.abspath(file_path),
-                    "relative_path": resolve_relative(file_path),
-                    "category": "error",
-                    "status": "error",
-                    "target_path": None,
-                    "reason": str(exc),
-                }
-            )
-            continue
+        for future in as_completed(futures):
+            try:
+                batch_results = future.result()
+                # Update progress by batch size
+                pbar.update(len(batch_results))
+                
+                for res in batch_results:
+                    f_path = res["file_path"]
+                    category = res["category"]
+                    size_bytes = res["size_bytes"]
+                    reason = res["reason"]
+                    
+                    total_bytes += size_bytes
+                    
+                    # Handle error
+                    if category == "error":
+                        # print(f"Error while processing {f_path}: {reason}") # Reduce console spam
+                        fail_count += 1
+                        write_prediction(f_path, "error")
+                        details.append({
+                            "source_path": os.path.abspath(f_path),
+                            "relative_path": resolve_relative(f_path),
+                            "category": "error",
+                            "status": "error",
+                            "target_path": None,
+                            "reason": reason,
+                        })
+                        continue
 
-        write_prediction(file_path, category)
-        is_supported = category in {"audio", "image", "text"}
-        abs_path = os.path.abspath(file_path)
-        detail_entry: Dict[str, Any] = {
-            "source_path": abs_path,
-            "relative_path": resolve_relative(file_path),
-            "category": category,
-            "status": None,
-            "target_path": None,
-            "reason": None,
-            "size_bytes": size_bytes,
-        }
+                    # Handle success
+                    write_prediction(f_path, category)
+                    is_supported = category in {"audio", "image", "text"}
+                    abs_path = os.path.abspath(f_path)
+                    
+                    detail_entry: Dict[str, Any] = {
+                        "source_path": abs_path,
+                        "relative_path": resolve_relative(f_path),
+                        "category": category,
+                        "status": None,
+                        "target_path": None,
+                        "reason": None,
+                        "size_bytes": size_bytes,
+                    }
 
-        if eval_mode:
-            if is_supported:
-                success_count += 1
-                detail_entry["status"] = "evaluated"
-            else:
+                    if eval_mode or collect_only:
+                        # In collect_only/eval_mode we don't move files
+                        if is_supported:
+                            success_count += 1
+                            detail_entry["status"] = "evaluated"
+                        else:
+                            fail_count += 1
+                            detail_entry["status"] = "unsupported"
+                            detail_entry["reason"] = "unsupported_category"
+                    else:
+                        # Move logic (Still serial here, but IO was parallel)
+                        if is_supported:
+                            moved_path = move_file_to_category(f_path, category, move_base_dir)
+                            if moved_path:
+                                success_count += 1
+                                detail_entry["status"] = "moved"
+                                detail_entry["target_path"] = moved_path
+                            else:
+                                fail_count += 1
+                                detail_entry["status"] = "failed_move"
+                                detail_entry["reason"] = "move_failed"
+                        else:
+                            # Move unknown
+                            moved_path = move_file_to_category(f_path, "unknown", move_base_dir)
+                            fail_count += 1 # technically a failure to be active modality
+                            detail_entry["status"] = "moved_unknown" if moved_path else "failed_move"
+                            detail_entry["category"] = "unknown" # Ensure category is unknown
+                            if moved_path: detail_entry["target_path"] = moved_path
+                    
+                    details.append(detail_entry)
+                    
+                    # Update aggregated stats
+                    if category in categorized:
+                        categorized[category].append(abs_path)
+                        categorized_bytes[category] += size_bytes
+                    else:
+                        if category not in other_categories:
+                            other_categories[category] = []
+                            other_bytes[category] = 0
+                        other_categories[category].append(abs_path)
+                        other_bytes[category] += size_bytes
+
+            except Exception as e:
+                print(f"Worker exception: {e}")
                 fail_count += 1
-                detail_entry["status"] = "unsupported"
-                detail_entry["reason"] = "unsupported_category"
-            details.append(detail_entry)
-            continue
-
-        if is_supported:
-            categorized[category].append(abs_path)
-            categorized_bytes[category] += size_bytes
-            if not collect_only:
-                moved_path = put_file_in_category(file_path, category, base_dir=move_base_dir)
-                if moved_path:
-                    success_count += 1
-                    detail_entry["status"] = "moved"
-                    detail_entry["target_path"] = moved_path
-                else:
-                    fail_count += 1
-                    detail_entry["status"] = "move_failed"
-                    detail_entry["reason"] = "move_failed"
-            else:
-                success_count += 1
-                detail_entry["status"] = "collected"
-        else:
-            other_categories.setdefault(category, []).append(os.path.abspath(file_path))
-            other_bytes[category] = other_bytes.get(category, 0) + size_bytes
-            print(f"Could not categorize {file_path}; predicted {category}")
-            fail_count += 1
-            detail_entry["status"] = "unknown"
-            detail_entry["reason"] = category
-
-        details.append(detail_entry)
-
+    
+    pbar.close()
     if prediction_file:
         prediction_file.close()
 
-    if not eval_mode and hasattr(iterator, "close"):
-        iterator.close()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
 
-    elapsed = time.time() - start_time
     print("\n分类完成")
     print(f"成功: {success_count} 文件")
     print(f"失败/跳过: {fail_count} 文件")
-    print(f"耗时: {elapsed:.2f} 秒")
+    print(f"耗时: {elapsed_time:.2f} 秒")
 
     return {
         "success_count": success_count,
         "fail_count": fail_count,
-        "elapsed_seconds": elapsed,
+        "elapsed_seconds": elapsed_time,
         "categorized": categorized,
         "unknown": other_categories,
         "per_modality_bytes": categorized_bytes,

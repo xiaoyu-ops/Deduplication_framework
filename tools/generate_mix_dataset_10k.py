@@ -226,10 +226,10 @@ def build_dataset(dataset_root: Path) -> List[Dict[str, str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate 10k mixed dataset")
-    parser.add_argument("--output-dir", default="mix_dataset_10k", help="输出数据集目录")
+    parser.add_argument("--output-dir", default="test_dataset", help="输出数据集目录")
     parser.add_argument(
         "--ground-truth",
-        default="mix_dataset_10k_ground_truth.jsonl",
+        default="test_dataset_ground_truth.jsonl",
         help="ground truth JSONL 输出路径",
     )
     parser.add_argument("--seed", type=int, default=42, help="随机种子")

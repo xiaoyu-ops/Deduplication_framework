@@ -302,7 +302,7 @@ outputs/
 | `pipelines/modalities/common.py`          | Runner 共用的 manifest 读取、输出目录创建、重复写入等工具函数。 |
 | `image/audio/text/method/pipeline_api.py` | 各模态的核心去重逻辑，可单独调用或在 Runner 中引用。            |
 | `tools/run_comparative_evaluation.py`     | 评估 sorter 分类效果，生成对比报告。                            |
-| `tools/generate_mix_dataset_10k.py`       | 生成或采样混合模态数据集，便于实验与回归测试。                  |
+| `tools/generate_mix_dataset_10k.py`       | 生成或采样混合模态数据集（默认 test_dataset），便于实验与回归测试。 |
 
 ---
 

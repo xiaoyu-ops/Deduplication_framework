@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 import yaml
+try:  # Optional heavy deps for LSH/Simhash
+    from datasketch import MinHash, MinHashLSH  # type: ignore
+except Exception:  # pragma: no cover
+    MinHash, MinHashLSH = None, None  # type: ignore
+try:
+    from simhash import Simhash  # type: ignore
+except Exception:  # pragma: no cover
+    Simhash = None  # type: ignore
 
 
 @dataclass
@@ -28,6 +37,11 @@ class TextDedupConfig:
     method: str = "jaccard"
     threshold: float = 0.8
     max_candidates: int = 5000
+    num_perm: int = 128
+    simhash_dist: int = 10
+    simhash_window: int = 1000
+    max_words: int = 200
+    max_char_grams: int = 200
     # 当候选数超过 max_candidates 时，使用滚动窗口快速去重，
     # 该值表示每次仅与最近保留的 `window_size` 个样本比较
     window_size: int = 100
@@ -107,6 +121,11 @@ def load_pipeline_config(config_path: Optional[str]) -> TextPipelineConfig:
             "method": "jaccard",
             "threshold": 0.8,
             "max_candidates": 5000,
+            "num_perm": 128,
+            "simhash_dist": 10,
+            "simhash_window": 1000,
+            "max_words": 200,
+            "max_char_grams": 200,
         },
     }
 
@@ -178,6 +197,8 @@ def run_text_pipeline(paths: Sequence[Path], config: TextPipelineConfig) -> Text
     dedup_summary = _run_deduplication(
         embedding_result.paths,
         embedding_result.features,
+        embedding_result.texts,
+        config.embedding,
         config.dedup,
     )
 
@@ -225,6 +246,13 @@ def _compute_ngrams(text: str, n: int) -> Set[str]:
     return char_ngrams | word_ngrams
 
 
+def _char_ngrams(text: str, n: int) -> List[str]:
+    cleaned = text.replace(" ", "")
+    if len(cleaned) < n:
+        return [] if not cleaned else [cleaned]
+    return [cleaned[i : i + n] for i in range(len(cleaned) - n + 1)]
+
+
 def _compute_text_signatures(
     paths: Sequence[Path],
     config: TextEmbeddingConfig,
@@ -262,6 +290,8 @@ def _compute_text_signatures(
 def _run_deduplication(
     paths: Sequence[Path],
     features: Sequence[Set[str]],
+    texts: Sequence[str],
+    embedding_config: TextEmbeddingConfig,
     config: TextDedupConfig,
 ) -> Dict[str, Any]:
     if not features:
@@ -272,22 +302,181 @@ def _run_deduplication(
             "skipped": 0,
         }
 
-    # If candidate set is very large, fall back to a fast rolling-window
-    # deduplication to avoid O(n^2) behavior. This keeps memory and CPU
-    # usage bounded while still removing many near-duplicates in practical
-    # datasets where duplicates tend to be locally clustered.
-    if len(features) > config.max_candidates:
-        print(
-            f"[text pipeline] candidate count {len(features)} exceeds max_candidates={config.max_candidates}; "
-            "using rolling-window quick deduplication"
-        )
-        return _deduplicate_windowed(paths, features, config.threshold, config.window_size)
-
     method = (config.method or "jaccard").lower()
     if method == "jaccard":
+        # If candidate set is very large, fall back to a fast rolling-window
+        # deduplication to avoid O(n^2) behavior.
+        if len(features) > config.max_candidates:
+            print(
+                f"[text pipeline] candidate count {len(features)} exceeds max_candidates={config.max_candidates}; "
+                "using rolling-window quick deduplication"
+            )
+            return _deduplicate_windowed(paths, features, config.threshold, config.window_size)
         return _deduplicate_by_jaccard(paths, features, config.threshold)
 
+    if method == "md5":
+        return _deduplicate_by_md5(paths, texts)
+
+    if method == "simhash":
+        return _deduplicate_by_simhash(paths, texts, config.simhash_dist, config.simhash_window)
+
+    if method == "minhash_lsh":
+        return _deduplicate_by_minhash_lsh(
+            paths,
+            texts,
+            embedding_config.ngram_size,
+            config,
+            include_words=False,
+        )
+
+    if method == "ours_lsh":
+        return _deduplicate_by_minhash_lsh(
+            paths,
+            texts,
+            embedding_config.ngram_size,
+            config,
+            include_words=True,
+        )
+
     raise ValueError(f"Unknown text deduplication method: {config.method}")
+
+
+def _deduplicate_by_md5(
+    paths: Sequence[Path],
+    texts: Sequence[str],
+) -> Dict[str, Any]:
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    seen: Dict[str, Path] = {}
+    duplicate_count = 0
+
+    for path, text in zip(paths, texts):
+        md5_val = hashlib.md5(text.encode("utf-8")).hexdigest()
+        original = seen.get(md5_val)
+        if original is None:
+            seen[md5_val] = path
+            keepers.append(path)
+        else:
+            duplicates.append(
+                {
+                    "original": str(original),
+                    "duplicates": [{"path": str(path), "similarity": 1.0}],
+                    "similarity_threshold": 1.0,
+                }
+            )
+            duplicate_count += 1
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
+
+
+def _deduplicate_by_simhash(
+    paths: Sequence[Path],
+    texts: Sequence[str],
+    dist_threshold: int,
+    window_size: int,
+) -> Dict[str, Any]:
+    if Simhash is None:
+        raise RuntimeError("simhash is required for simhash text deduplication")
+
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    duplicate_count = 0
+    seen: List[tuple[Path, Simhash]] = []
+
+    for path, text in zip(paths, texts):
+        curr = Simhash(text)
+        is_dup = False
+        dup_entries: List[Dict[str, object]] = []
+        window = seen[-window_size:] if window_size > 0 else seen
+        for seen_path, seen_hash in window:
+            if curr.distance(seen_hash) <= dist_threshold:
+                is_dup = True
+                dup_entries.append({"path": str(path), "similarity": 1.0})
+                duplicates.append(
+                    {
+                        "original": str(seen_path),
+                        "duplicates": [{"path": str(path), "similarity": 1.0}],
+                        "similarity_threshold": float(dist_threshold),
+                    }
+                )
+                duplicate_count += 1
+                break
+        if not is_dup:
+            keepers.append(path)
+            seen.append((path, curr))
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
+
+
+def _build_minhash(
+    text: str,
+    ngram_size: int,
+    config: TextDedupConfig,
+    include_words: bool,
+):
+    if MinHash is None:
+        raise RuntimeError("datasketch is required for MinHash LSH deduplication")
+    m = MinHash(num_perm=config.num_perm)
+    if include_words:
+        for w in text.split()[: config.max_words]:
+            m.update(w.encode("utf-8"))
+    for g in _char_ngrams(text, max(1, ngram_size))[: config.max_char_grams]:
+        m.update(g.encode("utf-8"))
+    return m
+
+
+def _deduplicate_by_minhash_lsh(
+    paths: Sequence[Path],
+    texts: Sequence[str],
+    ngram_size: int,
+    config: TextDedupConfig,
+    include_words: bool,
+) -> Dict[str, Any]:
+    if MinHashLSH is None:
+        raise RuntimeError("datasketch is required for MinHash LSH deduplication")
+
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    duplicate_count = 0
+    lsh = MinHashLSH(threshold=config.threshold, num_perm=config.num_perm)
+    key_to_path: Dict[str, Path] = {}
+
+    for idx, (path, text) in enumerate(zip(paths, texts)):
+        m = _build_minhash(text, ngram_size, config, include_words)
+        matches = lsh.query(m)
+        if not matches:
+            key = f"doc_{idx}"
+            lsh.insert(key, m)
+            key_to_path[key] = path
+            keepers.append(path)
+        else:
+            original_key = matches[0]
+            original_path = key_to_path.get(original_key, path)
+            duplicates.append(
+                {
+                    "original": str(original_path),
+                    "duplicates": [{"path": str(path), "similarity": None}],
+                    "similarity_threshold": float(config.threshold),
+                }
+            )
+            duplicate_count += 1
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
 
 
 def _jaccard_similarity(a: Set[str], b: Set[str]) -> float:

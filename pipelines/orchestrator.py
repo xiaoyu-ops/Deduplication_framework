@@ -399,8 +399,20 @@ class PipelineOrchestrator:
             # ignore bad config and use defaults
             pass
 
+        # OPTIMIZATION: If subset is huge (e.g. >10k), we only check a random sample to avoid hanging.
+        # Checking 3.8M files one-by-one can take >10 minutes.
+        import random
+        check_subset = subset
+        is_sampled = False
+        if len(subset) > 10000:
+             check_subset = random.sample(subset, 10000)
+             is_sampled = True
+             self.logger.info(
+                 "Manifest accessibility check sampled 10000/%d files to save time.", len(subset)
+             )
+
         missing_files: list[str] = []
-        for p in subset:
+        for p in check_subset:
             # Try as-is first, then relative to input_root if provided
             try_paths = [Path(p)]
             if input_root and not Path(p).is_absolute():
@@ -413,10 +425,11 @@ class PipelineOrchestrator:
             if not exists:
                 missing_files.append(p)
 
-        total = len(subset)
+        total = len(check_subset)
         missing_count = len(missing_files)
         missing_fraction = (missing_count / total) if total > 0 else 0.0
 
+        # Scale up failure logic if sampled (approximation) -> strict check logic might be noisy but safe
         if (missing_fraction > max_missing_fraction) or (
             max_missing_count is not None and missing_count > max_missing_count
         ):
@@ -626,11 +639,11 @@ class PipelineOrchestrator:
         if extra_args:
             args.extend(extra_args)
 
-        manifest_limit = (
-            modality_config.get("manifest_subset_count")
-            or modality_config.get("batch_size")
-            or self.config.general.get("batch_size")
-        )
+        manifest_limit = modality_config.get("manifest_subset_count")
+        if manifest_limit is None:
+            manifest_limit = modality_config.get("batch_size")
+        if manifest_limit is None:
+            manifest_limit = self.config.general.get("batch_size")
 
         # Build chunks like text stage so we process all files instead of only the first subset
         if manifest_limit and manifest_limit > 0:
@@ -685,11 +698,12 @@ class PipelineOrchestrator:
                 extra_env["PIPELINE_IMAGE_INPUT_LIST"] = str(chunk_manifest)
 
                 try:
+                    # Capture disabled to show tqdm progress
                     result = self.executor.run(
                         args,
                         env_name=env_name,
                         cwd=cwd,
-                        capture_output=True,
+                        capture_output=False,
                         check=True,
                         extra_env=extra_env,
                     )
@@ -1266,6 +1280,48 @@ class PipelineOrchestrator:
         config_hash = compute_dict_hash(sorter_config_snapshot)
         manifest_name = sorter_config.get("manifest_name", "manifest.csv")
         manifest_path = stage_dir / manifest_name
+
+        if not sorter_config.get("enabled", True):
+            self.logger.info("Sorter stage disabled by configuration. Checking for existing manifest...")
+            
+            # 1. Check current directory
+            if manifest_path.exists():
+                self.logger.info("Loaded existing manifest from %s", manifest_path)
+                self._load_manifest_snapshot(manifest_path)
+                return
+
+            # 2. Check previous runs (auto-discovery)
+            import shutil
+            found_previous = False
+            # artifacts_root is .../artifacts/run_id. parent is .../artifacts
+            artifacts_base = self.artifacts_root.parent
+            if artifacts_base.exists():
+                # List directories, sort by name descending (assuming timestamp naming YYYYMMDD-HHMMSS)
+                candidates = sorted(
+                    [d for d in artifacts_base.iterdir() if d.is_dir() and d.name != self.run_id],
+                    key=lambda x: x.name,
+                    reverse=True
+                )
+                self.logger.info("Searching for recent manifest in %d previous runs...", len(candidates))
+                
+                for run_dir in candidates:
+                    prev_manifest = run_dir / "stage1_sorter" / manifest_name
+                    if prev_manifest.exists():
+                        self.logger.info("Found usable manifest from previous run: %s", prev_manifest)
+                        try:
+                            shutil.copy2(prev_manifest, manifest_path)
+                            self.logger.info("Copied manifest to current stage directory: %s", manifest_path)
+                            self._load_manifest_snapshot(manifest_path)
+                            return
+                        except Exception as e:
+                            self.logger.warning("Failed to copy manifest from %s: %s", prev_manifest, e)
+                        
+            # If we reach here, we found nothing
+            self.logger.error("Sorter disabled and no manifest found in current or previous runs.")
+            raise RuntimeError(
+                f"Sorter stage is disabled but manifest not found at {manifest_path}, "
+                "and no valid manifest could be recovered from previous runs."
+            )
 
         if self._stage_should_resume(stage_name, config_hash):
             self.logger.info("Sorter stage already completed with matching config hash, skipping")

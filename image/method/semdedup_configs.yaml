@@ -1,10 +1,10 @@
 
-save_folder: "D:\\桌面\\Deduplication_framework\\image\\clustering\\semdedup_result"
-sorted_clusters_path: "D:\\桌面\\Deduplication_framework\\image\\clustering\\results\\ncentroids_2000\\sorted_clusters"
+save_folder: "D:\\\Deduplication_framework\\image\\clustering\\semdedup_result"
+sorted_clusters_path: "D:\\\Deduplication_framework\\image\\clustering\\results\\ncentroids_2000\\sorted_clusters"
 # -- number of clusters
 # --簇的数量
 num_clusters: 200
-embs_memory_loc: "D:\\桌面\\Deduplication_framework\\embeddings\\image_embeddings_converted.npy"
+embs_memory_loc: "D:\\\Deduplication_framework\\embeddings\\image_embeddings_converted.npy"
 # -- dataset size
 dataset_size: 10000
 # -- embeddings size

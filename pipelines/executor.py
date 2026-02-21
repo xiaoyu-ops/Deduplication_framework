@@ -1,6 +1,9 @@
+from __future__ import annotations
+import sys
 import os
 import shlex
 import subprocess
+from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Mapping, Optional, Sequence
 
@@ -40,7 +43,46 @@ class LocalExecutor(BaseExecutor):
     def __init__(self, conda_executable: Optional[str] = None) -> None:
         self.conda_exec = conda_executable or "conda"
 
-    def _build_command(self, args: Sequence[str], env_name: Optional[str]) -> List[str]:
+    def _build_command(
+        self,
+        args: Sequence[str],
+        env_name: Optional[str],
+        *,
+        force_conda_run: bool = False,
+    ) -> List[str]:
+        # Optimization: Try to resolve direct python executable to bypass 'conda run' overhead/instability on Windows
+        if not force_conda_run and env_name and args and args[0] == "python":
+            # Guess standard location based on conda executable path
+            # self.conda_exec is typically .../Scripts/conda.exe
+            # We want .../envs/{env_name}/python.exe
+            try:
+                conda_path = Path(self.conda_exec)
+                # If path contains 'Scripts' (case insensitive check)
+                parts = conda_path.parts
+                root = None
+                
+                # Walk up to find 'anaconda3' or installation root
+                # Typical: C:/Users/sysu/anaconda3/Scripts/conda.exe
+                # Target:  C:/Users/sysu/anaconda3/envs/image/python.exe
+                
+                # Simple heuristic: go up 2 levels from Scripts/conda.exe
+                if len(parts) > 2 and parts[-2].lower() == "scripts":
+                    root = conda_path.parent.parent
+                else:
+                    # Maybe it's in condabin or root? Try parent.
+                    root = conda_path.parent
+
+                if root:
+                    # Check envs directory
+                    direct_python = root / "envs" / env_name / "python.exe"
+                    if direct_python.exists():
+                        # Replace 'python' with absolute path and drop conda run wrapper
+                        new_args = list(args)
+                        new_args[0] = str(direct_python)
+                        return new_args
+            except Exception:
+                pass # Fallback to standard conda run if anything goes wrong
+
         if env_name:
             return [
                 self.conda_exec,
@@ -63,7 +105,13 @@ class LocalExecutor(BaseExecutor):
     ) -> ExecResult:
         import time
 
-        full_cmd = self._build_command(args, env_name)
+        force_conda_run = False
+        if os.environ.get("PIPELINE_FORCE_CONDA_RUN"):
+            force_conda_run = True
+        if extra_env and extra_env.get("PIPELINE_FORCE_CONDA_RUN"):
+            force_conda_run = True
+
+        full_cmd = self._build_command(args, env_name, force_conda_run=force_conda_run)
         process_env = None
         if extra_env:
             process_env = os.environ.copy()
@@ -73,21 +121,22 @@ class LocalExecutor(BaseExecutor):
         if process_env is None:
             process_env = os.environ.copy()
         process_env.setdefault("PYTHONIOENCODING", "utf-8")
+        process_env.setdefault("PYTHONUNBUFFERED", "1")
 
         start = time.monotonic()
         try:
             # Capture raw bytes from subprocess and decode ourselves.
-            # This lets us try UTF-8 first and fall back to the
-            # system encoding (mbcs/cp936 on Windows) when needed,
-            # avoiding persistent mojibake when child processes
-            # emit output in a different encoding.
-            completed = subprocess.run(
-                full_cmd,
-                cwd=cwd,
-                capture_output=capture_output,
-                text=False,
-                env=process_env,
-            )
+            run_kwargs = {
+                "cwd": cwd,
+                "text": False,
+                "env": process_env,
+            }
+            if capture_output:
+                run_kwargs["capture_output"] = True
+            else:
+                run_kwargs["stdout"] = None
+                run_kwargs["stderr"] = None
+            completed = subprocess.run(full_cmd, **run_kwargs)
             # completed.stdout/stderr are bytes when text=False.
             def _decode_bytes(b: Optional[bytes]) -> str:
                 if b is None:

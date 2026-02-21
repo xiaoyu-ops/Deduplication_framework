@@ -130,7 +130,7 @@ if __name__ == "__main__":
             print("\n--- 进行去重 ---")
             if switcher.setup_image_env():
                 # 使用配置文件并传入默认 eps 列表（按需修改 eps_list）
-                config_path = r"D:\桌面\Deduplication_framework\image\method\semdedup_configs.yaml"
+                config_path = r"D:\Deduplication_framework\image\method\semdedup_configs.yaml"
                 eps_list = "0.05"
                 if os.name == 'nt':  # Windows系统
                     command = f'conda activate tryamrosemdedup && python "{os.path.join(current_dir, "simple_semdedup.py")}" --config-file "{config_path}" --eps-list "{eps_list}"'
@@ -150,7 +150,7 @@ if __name__ == "__main__":
             print("\n--- 提取去重后数据 ---")
             if switcher.setup_image_env():
                 # 使用与 simple_semdedup 相同的配置文件与 eps（取 eps_list 的第一个值）
-                config_path = r"D:\桌面\Deduplication_framework\image\method\semdedup_configs.yaml"
+                config_path = r"D:\Deduplication_framework\image\method\semdedup_configs.yaml"
                 eps_list = "0.05"  # 与 choice 5 中保持一致，必要时改为从配置中读取
                 eps_value = eps_list.split(",")[0].strip()
                 # 输出文件夹，放到工程下 image/deduped/eps_<eps>
@@ -248,7 +248,7 @@ if __name__ == "__main__":
             print("\n--- 进行去重 ---")
             if switcher.setup_image_env():
                 # 使用配置文件并传入默认 eps 列表（按需修改 eps_list）
-                config_path = r"D:\桌面\Deduplication_framework\image\method\semdedup_configs.yaml"
+                config_path = r"D:\Deduplication_framework\image\method\semdedup_configs.yaml"
                 eps_list = "0.15"
                 if os.name == 'nt':  # Windows系统
                     command = f'conda activate tryamrosemdedup && python "{os.path.join(current_dir, "simple_semdedup.py")}" --config-file "{config_path}" --eps-list "{eps_list}"'
@@ -266,7 +266,7 @@ if __name__ == "__main__":
 
             print("\n--- 提取去重后数据 ---")
             if switcher.setup_image_env():
-                config_path = r"D:\桌面\Deduplication_framework\image\method\semdedup_configs.yaml"
+                config_path = r"D:\Deduplication_framework\image\method\semdedup_configs.yaml"
                 eps_list = "0.15"  # 与该完整流程使用的 eps_list 保持一致
                 eps_value = eps_list.split(",")[0].strip()
                 output_folder = os.path.join(root_dir, "image", "deduped", f"eps_{eps_value.replace('.','_')}")

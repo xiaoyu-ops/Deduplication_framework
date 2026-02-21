@@ -2,7 +2,7 @@ import os
 import numpy as np
 from numpy.lib.format import open_memmap
 
-path = r"D:\桌面\Deduplication_Framework\embeddings\image_embeddings.npy"
+path = r"D:\Deduplication_Framework\embeddings\image_embeddings.npy"
 assert os.path.exists(path), path
 
 candidates = [

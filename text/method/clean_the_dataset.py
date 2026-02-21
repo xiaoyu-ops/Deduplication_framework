@@ -901,7 +901,7 @@ def interactive_cleaning():
         print("-" * 40)
         
         # 默认目录
-        default_dir = r"D:\桌面\Deduplication_framework\text\dataset"
+        default_dir = r"D:\Deduplication_framework\text\dataset"
         print(f"默认数据集目录: {default_dir}")
         
         # 询问文件路径

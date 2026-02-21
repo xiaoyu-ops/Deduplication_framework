@@ -5,7 +5,7 @@ import numpy as np
 from sort_clusters import assign_and_sort_clusters
 
 # 修正路径字符串，避免 SyntaxWarning
-config_file = r"D:\桌面\Deduplication_framework\image\method\configs\openclip\clustering_configs.yaml"
+config_file = r"D:\Deduplication_framework\image\method\configs\openclip\clustering_configs.yaml"
 
 # 日志
 logger = logging.getLogger(__name__)

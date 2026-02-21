@@ -10,6 +10,8 @@ supporting legacy artefacts produced by the historical SemDeDup workflow.
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,8 +32,33 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     Image = None  # type: ignore
 
+try:
+    from torch.utils.data import Dataset, DataLoader
+except ImportError:
+    Dataset, DataLoader = object, None
+
 from image.method import legacy_integration
 
+class ImageListDataset(Dataset):
+    def __init__(self, path_list, transform):
+        self.path_list = path_list
+        self.transform = transform
+    def __len__(self): return len(self.path_list)
+    def __getitem__(self, idx):
+        path = self.path_list[idx]
+        try:
+            img = Image.open(path).convert("RGB")
+            return self.transform(img), idx, 1
+        except Exception:
+            # Fallback: create a dummy black image and transform it.
+            # This ensures the resulting tensor has the exact shape expected by the model
+            # (e.g. 224x224 or 336x336), preventing batch collation errors.
+            try:
+                dummy = Image.new("RGB", (224, 224), (0, 0, 0))
+                return self.transform(dummy), idx, 0
+            except Exception:
+                # Last resort if even transform fails
+                return torch.zeros((3, 224, 224), dtype=torch.float32), idx, 0
 
 @dataclass
 class EmbeddingConfig:
@@ -167,22 +194,27 @@ def load_pipeline_config(config_path: Optional[str]) -> ImagePipelineConfig:
 
 def run_image_pipeline(paths: Sequence[Path], config: ImagePipelineConfig) -> ImagePipelineResult:
     """Compute embeddings + deduplicate for the provided image paths."""
+    print(f"[image pipeline] Starting run_image_pipeline with {len(paths)} input paths...", flush=True)
 
     start = time.time()
     unique_paths: List[Path] = []
     seen: Set[str] = set()
     missing: List[Path] = []
-
+    
+    # SKIP VERIFICATION since we trust the input from previous runs or direct manifest
+    # Checking 3.8M files on Windows HDD is too slow (500/sec).
+    # We assume if the path is in the manifest/npy, it's valid for deduplication purposes.
+    # We just do string deduplication to handle duplicates in the manifest itself.
+    print("[image pipeline] Skipping physical file verification for speed...", flush=True)
+    
     for path in paths:
-        candidate = Path(path)
-        resolved = str(candidate.resolve())
-        if resolved in seen:
+        path_str = str(path)
+        if path_str in seen:
             continue
-        seen.add(resolved)
-        if candidate.exists():
-            unique_paths.append(candidate)
-        else:
-            missing.append(candidate)
+        seen.add(path_str)
+        unique_paths.append(Path(path)) # Just append, do not check exists()
+        
+    print(f"[image pipeline] Prepared {len(unique_paths)} unique paths.", flush=True)
 
     if not unique_paths:
         stats = {
@@ -337,6 +369,7 @@ def _compute_embeddings_open_clip(
     paths: Sequence[Path],
     config: EmbeddingConfig,
 ) -> Tuple[np.ndarray, List[Path], List[Path], str]:
+    print("[image pipeline] Entering _compute_embeddings_open_clip...", flush=True)
     if open_clip is None or torch is None:
         raise RuntimeError("open_clip and torch are required for the open_clip backend")
     if Image is None:
@@ -345,53 +378,91 @@ def _compute_embeddings_open_clip(
     device = (config.device or "auto").lower()
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    model, _, preprocess_val = open_clip.create_model_and_transforms(config.model_name)
-    preprocess = preprocess_val
-    model = model.to(device)
-    model.eval()
+    
+    print(f"[image pipeline] Loading OpenCLIP model: {config.model_name} on {device}...", flush=True)
+    try:
+        model, _, preprocess_val = open_clip.create_model_and_transforms(config.model_name)
+        preprocess = preprocess_val
+        model = model.to(device)
+        model.eval()
+        print("[image pipeline] Model loaded successfully.", flush=True)
+    except Exception as e:
+        print(f"[image pipeline] Failed to load model: {e}", flush=True)
+        raise
 
     batch_size = max(1, config.batch_size)
-    embeddings: List[np.ndarray] = []
+    
+    # === Use DataLoader for Concurrency & Progress Bar ===
+    # ImageListDataset is now defined at module level to allow pickling
+
+    dataset = ImageListDataset(paths, preprocess)
+    
+    # User requested 8 workers for performance
+    num_workers = 8
+    if os.name == 'nt':
+        # Cap at 8 for Windows stability, but user asked for 8.
+        pass 
+
+    print(f"[image pipeline] Using {num_workers} workers for feature extraction (Batch={batch_size}, Device={device})")
+    
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=num_workers,
+        pin_memory=(device == "cuda")
+    )
+    
+    embeddings_list: List[np.ndarray] = []
     valid_paths: List[Path] = []
     failed_paths: List[Path] = []
+    
+    # Setup Progress Bar
+    try:
+        from tqdm import tqdm
+        pbar = tqdm(total=len(paths), desc="Extracting Features", unit="img", file=sys.stdout)
+    except ImportError:
+        pbar = None
 
-    batch_tensors: List[Any] = []
-    batch_indices: List[int] = []
-
-    with torch.no_grad():  # pragma: no cover - GPU heavy path
-        for idx, path in enumerate(paths):
-            try:
-                image = Image.open(path).convert("RGB")
-                tensor = preprocess(image)
-            except Exception as exc:
-                print(f"[image pipeline] failed to load {path}: {exc}")
-                failed_paths.append(Path(path))
+    with torch.no_grad():
+        for batch_imgs, batch_idxs, batch_valid_flags in dataloader:
+            if pbar: pbar.update(len(batch_idxs))
+            
+            # Filter valid images in this batch on CPU side first to avoid sending zeros to GPU?
+            # Actually better to send all to GPU in bulk if mostly valid, but we need to handle invalid logic.
+            # Let's filter indices.
+            
+            valid_mask = (batch_valid_flags == 1)
+            if not valid_mask.any():
+                # All failed in this batch
+                for i in range(len(batch_idxs)):
+                   failed_paths.append(paths[batch_idxs[i]])
                 continue
 
-            batch_tensors.append(tensor)
-            batch_indices.append(idx)
+            # Process valid part
+            valid_imgs = batch_imgs[valid_mask].to(device)
+            valid_indices = batch_idxs[valid_mask]
+            
+            # Handle failed part
+            if (~valid_mask).any():
+                failed_indices = batch_idxs[~valid_mask]
+                for i in failed_indices:
+                    failed_paths.append(paths[i])
 
-            if len(batch_tensors) == batch_size:
-                batch_array = torch.stack(batch_tensors).to(device)
-                enc = model.encode_image(batch_array)
-                enc = torch.nn.functional.normalize(enc, dim=1)
-                embeddings.append(enc.cpu().numpy())
-                valid_paths.extend(Path(paths[i]) for i in batch_indices)
-                batch_tensors.clear()
-                batch_indices.clear()
+            # Inference
+            features = model.encode_image(valid_imgs)
+            features = torch.nn.functional.normalize(features, dim=1)
+            
+            embeddings_list.append(features.cpu().numpy())
+            for idx in valid_indices:
+                valid_paths.append(paths[idx])
 
-        if batch_tensors:
-            batch_array = torch.stack(batch_tensors).to(device)
-            enc = model.encode_image(batch_array)
-            enc = torch.nn.functional.normalize(enc, dim=1)
-            embeddings.append(enc.cpu().numpy())
-            valid_paths.extend(Path(paths[i]) for i in batch_indices)
+    if pbar: pbar.close()
 
-    if not embeddings:
-        raise RuntimeError("open_clip produced no embeddings")
+    if not embeddings_list:
+        raise RuntimeError("open_clip produced no embeddings (all images failed?)")
 
-    stacked = np.concatenate(embeddings, axis=0)
+    stacked = np.concatenate(embeddings_list, axis=0)
     return stacked, valid_paths, failed_paths, "open_clip"
 
 
@@ -453,6 +524,200 @@ def _run_deduplication(
         return _deduplicate_sem_dedup(paths, embeddings, config, indices)
 
     raise ValueError(f"Unknown deduplication method: {config.method}")
+
+
+def _perform_semdedup_on_groups(
+    paths: Sequence[Path],
+    embeddings: np.ndarray,
+    groups: Dict[Any, List[int]],
+    config: DedupConfig,
+    desc: str = "SemDeDup"
+) -> Dict[str, object]:
+    """Core SemDeDup logic applied to arbitrary groups of indices."""
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    duplicate_count = 0
+    threshold = 1.0 - float(config.eps)
+
+    try:
+        from tqdm import tqdm
+        pbar = tqdm(total=len(groups), desc=desc, unit="group", file=sys.stdout)
+    except ImportError:
+        pbar = None
+        print(f"[image pipeline] Processing {len(groups)} groups ({desc})...")
+
+    # Process each group
+    for group_id, indices in groups.items():
+        if len(indices) < 2:
+            # Singleton files are always kept
+            for idx in indices:
+                keepers.append(paths[idx])
+        else:
+            # Extract cluster features (Copy subset to avoid modifying global or OOM)
+            raw_feats = embeddings[indices] # [N, D]
+            # Normalize locally (Mem-efficient)
+            local_norm = np.linalg.norm(raw_feats, axis=1, keepdims=True) + 1e-12
+            feats = raw_feats / local_norm
+
+            local_paths = [paths[i] for i in indices]
+            N = len(indices)
+            
+            # A. Calculate Centroid
+            centroid = np.mean(feats, axis=0) # [D]
+            centroid = centroid / (np.linalg.norm(centroid) + 1e-12)
+            
+            # B. Sort by similarity to centroid
+            sim_to_center = feats @ centroid
+            
+            # --- Quality-Aware Sorting (Q-SemDeDup) ---
+            # Instead of just taking the closest to centroid, we prefer higher quality (larger file size)
+            # Alpha controls trade-off: 1.0 = Pure SemDeDup, 0.0 = Best Quality Only
+            alpha = 0.7 
+            
+            try:
+                # Use file size as a proxy for quality (resolution check is too slow here)
+                sizes = np.array([p.stat().st_size for p in local_paths], dtype=np.float32)
+                if sizes.max() > sizes.min():
+                    sizes_norm = (sizes - sizes.min()) / (sizes.max() - sizes.min())
+                else:
+                    sizes_norm = np.zeros_like(sizes)
+                
+                # Combined score: Quality-Adjusted Similarity
+                # Ensure sim is in [0,1] range roughly for weighing stability
+                combined_score = alpha * sim_to_center + (1 - alpha) * sizes_norm
+                sort_order = np.argsort(combined_score)[::-1]
+            except Exception:
+                # Fallback to pure similarity if IO error
+                sort_order = np.argsort(sim_to_center)[::-1]
+            
+            # C. Greedy De-dup
+            kept_local_indices: List[int] = [] # indices into 'feats' (0..N-1)
+            kept_feats_list: List[np.ndarray] = []
+            
+            # Track duplicates for reporting: keeper_local_idx -> list of dup info
+            local_dups_map: Dict[int, List[Dict[str, object]]] = {}
+
+            for rank_i in sort_order:
+                current_feat = feats[rank_i]
+                is_dup = False
+                best_match_idx = -1
+                max_sim = -1.0
+                
+                # Check against already kept
+                if kept_feats_list:
+                    kept_feats_arr = np.array(kept_feats_list) # [K, D]
+                    # Cosine sim: [K,D] @ [D] -> [K]
+                    sims = kept_feats_arr @ current_feat
+                    best_match_idx = int(np.argmax(sims))
+                    max_sim = float(sims[best_match_idx])
+                    
+                    if max_sim >= threshold:
+                        is_dup = True
+                        
+                if not is_dup:
+                    kept_local_indices.append(rank_i)
+                    kept_feats_list.append(current_feat)
+                    keepers.append(local_paths[rank_i])
+                else:
+                    duplicate_count += 1
+                    # Map to the keeper that caused the deletion
+                    keeper_idx = kept_local_indices[best_match_idx]
+                    if keeper_idx not in local_dups_map:
+                        local_dups_map[keeper_idx] = []
+                    local_dups_map[keeper_idx].append({
+                        "path": str(local_paths[rank_i]),
+                        "similarity": max_sim
+                    })
+            
+            # Add grouped duplicates to main list
+            for kidx, dup_list in local_dups_map.items():
+                duplicates.append({
+                    "original": str(local_paths[kidx]),
+                    "duplicates": dup_list,
+                    "similarity_threshold": float(threshold)
+                })
+        
+        if pbar: pbar.update(1)
+
+    if pbar: pbar.close()
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
+
+
+def _deduplicate_by_folder(
+    paths: Sequence[Path],
+    embeddings: np.ndarray,
+    config: DedupConfig,
+) -> Dict[str, object]:
+    """Implements SemDeDup logic treating each leaf directory as a cluster."""
+    # 1. Group by parent folder
+    folder_groups: Dict[Path, List[int]] = {}
+    for idx, p in enumerate(paths):
+        parent = p.parent
+        if parent not in folder_groups:
+            folder_groups[parent] = []
+        folder_groups[parent].append(idx)
+        
+    return _perform_semdedup_on_groups(paths, embeddings, folder_groups, config, desc="Folder-SemDeDup")
+
+
+def _deduplicate_dynamic_clustering(
+    paths: Sequence[Path],
+    embeddings: np.ndarray,
+    config: DedupConfig,
+) -> Dict[str, object]:
+    """Implements SemDeDup logic using dynamic MiniBatchKMeans clustering."""
+    try:
+        from sklearn.cluster import MiniBatchKMeans
+        print(f"[image pipeline] running MiniBatchKMeans on {len(paths)} items...", flush=True)
+
+        # n_clusters = max(1, min(len(paths) // 100, 50000))
+        # 优化聚类逻辑: 调整为每 1000 个样本一个簇 (巨大簇策略，以最大化 Recall)
+        # N // 1000 -> 10k items = 10 clusters only!
+        n_clusters = max(1, min(len(paths) // 1000, 50000))
+        
+        if n_clusters == 1:
+             print("[image pipeline] dataset small, using pairwise fallback")
+             return _deduplicate_pairwise(paths, embeddings, config)
+
+        kmeans = MiniBatchKMeans(
+            n_clusters=n_clusters,
+            batch_size=min(4096, len(paths)),
+            n_init='auto',
+            random_state=42,
+            compute_labels=True,
+            verbose=0
+        )
+        
+        # Normalize for spherical k-means approximation
+        norm_embeddings = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-12)
+        labels = kmeans.fit_predict(norm_embeddings)
+        
+        # Build groups
+        groups: Dict[int, List[int]] = {}
+        for idx, label in enumerate(labels):
+            label = int(label)
+            if label not in groups:
+                groups[label] = []
+            groups[label].append(idx)
+            
+        print(f"[image pipeline] clusted into {len(groups)} groups. Starting SemDeDup...", flush=True)
+        return _perform_semdedup_on_groups(paths, embeddings, groups, config, desc="Global-SemDeDup")
+
+    except ImportError as e:
+        print(f"[image pipeline] sklearn import failed (ImportError): {e}")
+        # import traceback; traceback.print_exc() # detailed trace
+        print("[image pipeline] falling back to folder strategy.")
+        return _deduplicate_by_folder(paths, embeddings, config)
+    except Exception as exc:
+        print(f"[image pipeline] clustering failed (Exception): {exc}")
+        print("[image pipeline] falling back to folder strategy.")
+        return _deduplicate_by_folder(paths, embeddings, config)
 
 
 def _deduplicate_pairwise(
@@ -537,8 +802,8 @@ def _deduplicate_sem_dedup(
     indices: Optional[List[int]],
 ) -> Dict[str, object]:
     if indices is None:
-        print("[image pipeline] sem_dedup requires precomputed indices; falling back to pairwise")
-        return _deduplicate_pairwise(paths, embeddings, config)
+        print("[image pipeline] SemDeDup indices not provided; attempting dynamic global clustering.")
+        return _deduplicate_dynamic_clustering(paths, embeddings, config)
 
     try:
         keep_set, cluster_members = _load_legacy_sem_dedup_assets(config, indices)

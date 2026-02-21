@@ -205,7 +205,7 @@ def main():
     # 加载原始数据集
     # 尝试从配置读取 images_source（优先），否则使用默认本地 dataset 目录
     images_source = config.get("paths", {}).get("images_source",
-                    r"D:\桌面\Deduplication_framework\image\dataset")
+                    r"D:\Deduplication_framework\image\dataset")
     images_source = os.path.abspath(images_source)
     print(f"从本地目录加载原始数据集: {images_source}")
 

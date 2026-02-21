@@ -44,9 +44,9 @@ from tools.naive_baseline_classifier import (  # noqa: E402
 )
 import sorter as sorter_module  # noqa: E402
 
-DEFAULT_DATASET_DIR = REPO_ROOT / "mix_dataset_10k"
+DEFAULT_DATASET_DIR = REPO_ROOT / "test_dataset"
 DEFAULT_GROUND_TRUTH = DEFAULT_DATASET_DIR / "ground_truth.jsonl"
-DEFAULT_WORK_DIR = REPO_ROOT / "mix_dataset_eval"
+DEFAULT_WORK_DIR = REPO_ROOT / "test_dataset_eval"
 DEFAULT_RESULTS_DIR = REPO_ROOT / "evaluation" / "comparative"
 
 

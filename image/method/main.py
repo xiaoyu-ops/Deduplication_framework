@@ -112,7 +112,7 @@ if __name__ == "__main__":
     data = load_config_json(config_path)
     if data is None:
         print("加载配置失败，采用默认配置（本地 dataset 目录）")
-        data = {"paths":r"D:\桌面\Deduplication_framework\image\dataset"}
+        data = {"paths":r"D:\Deduplication_framework\image\dataset"}
 
     print("在配置文件中选择数据类型:1.从huggface上下载 2.本地文件")
 
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     else:
         # images_source 可以是目录，也可以是一个具体的 JSON/TXT 文件；优先从配置读取路径
         images_source = Path(data.get("paths", {}).get("images_source",
-                            r"D:\桌面\Deduplication_framework\image\dataset"))
+                            r"D:\Deduplication_framework\image\dataset"))
 
         exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
         files_set = set()

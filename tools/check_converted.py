@@ -1,6 +1,6 @@
 import os
 import numpy as np
-p = r"D:\桌面\Deduplication_framework\embeddings\image_embeddings_converted.npy"
+p = r"D:\Deduplication_framework\embeddings\image_embeddings_converted.npy"
 print("exists:", os.path.exists(p), "size:", os.path.getsize(p) if os.path.exists(p) else None)
 arr = np.load(p, mmap_mode='r')
 print("shape:", arr.shape, "dtype:", arr.dtype)

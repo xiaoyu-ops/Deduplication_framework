@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import yaml
+try:  # Optional deps for audio-based hashing
+    import librosa  # type: ignore
+except Exception:  # pragma: no cover
+    librosa = None  # type: ignore
+try:
+    import imagehash  # type: ignore
+except Exception:  # pragma: no cover
+    imagehash = None  # type: ignore
+try:
+    from PIL import Image  # type: ignore
+except Exception:  # pragma: no cover
+    Image = None  # type: ignore
 
 try:  # Optional dependency for on-the-fly fingerprint extraction
     from audio.method import spectrum_fingerprint  # type: ignore
@@ -40,6 +53,7 @@ class AudioDedupConfig:
     method: str = "jaccard"  # jaccard | hash (reserved for future)
     threshold: float = 0.85
     max_candidates: int = 2048
+    mfcc_threshold: float = 0.95
     # LSH specific options
     lsh_b: int = 20
     lsh_r: int = 10
@@ -176,6 +190,26 @@ def run_audio_pipeline(paths: Sequence[Path], config: AudioPipelineConfig) -> Au
             "processed": 0,
         }
         return AudioPipelineResult(keepers=[], duplicates=[], missing=missing, stats=stats)
+
+    method = (config.dedup.method or "jaccard").lower()
+
+    if method in {"md5", "phash", "mfcc"}:
+        dedup_summary = _run_lightweight_dedup(paths=unique_paths, config=config.dedup)
+        stats = {
+            "fingerprint_backend": method,
+            "embedding_backend": method,
+            "unique": len(dedup_summary["keepers"]),
+            "duplicates": dedup_summary["duplicate_count"],
+            "missing": len(missing),
+            "processed": len(unique_paths),
+            "skipped_due_to_limit": dedup_summary["skipped"],
+        }
+        return AudioPipelineResult(
+            keepers=dedup_summary["keepers"],
+            duplicates=dedup_summary["duplicates"],
+            missing=missing,
+            stats=stats,
+        )
 
     embedding_result: Optional[EmbeddingResult] = None
 
@@ -361,6 +395,191 @@ def _run_deduplication(
         return _deduplicate_by_lsh(paths, embeddings, config)
 
     raise ValueError(f"Unknown audio deduplication method: {config.method}")
+
+
+def _run_lightweight_dedup(
+    paths: Sequence[Path],
+    config: AudioDedupConfig,
+) -> Dict[str, Any]:
+    method = (config.method or "md5").lower()
+    if method == "md5":
+        return _deduplicate_by_md5(paths)
+    if method == "phash":
+        return _deduplicate_by_phash(paths)
+    if method == "mfcc":
+        return _deduplicate_by_mfcc(paths, config)
+    raise ValueError(f"Unknown lightweight audio deduplication method: {config.method}")
+
+
+def _deduplicate_by_md5(paths: Sequence[Path]) -> Dict[str, Any]:
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    seen: Dict[str, Path] = {}
+    duplicate_count = 0
+
+    for path in paths:
+        try:
+            hash_md5 = hashlib.md5()
+            with path.open("rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            md5_val = hash_md5.hexdigest()
+        except Exception:
+            keepers.append(path)
+            continue
+
+        original = seen.get(md5_val)
+        if original is None:
+            seen[md5_val] = path
+            keepers.append(path)
+        else:
+            duplicates.append(
+                {
+                    "original": str(original),
+                    "duplicates": [{"path": str(path), "similarity": 1.0}],
+                    "similarity_threshold": 1.0,
+                }
+            )
+            duplicate_count += 1
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
+
+
+def _deduplicate_by_phash(paths: Sequence[Path]) -> Dict[str, Any]:
+    if librosa is None or imagehash is None or Image is None:
+        raise RuntimeError("librosa, imagehash, and Pillow are required for phash audio deduplication")
+
+    keepers: List[Path] = []
+    duplicates: List[Dict[str, object]] = []
+    seen: Dict[str, Path] = {}
+    duplicate_count = 0
+
+    for path in paths:
+        try:
+            y, sr = librosa.load(str(path), sr=16000, duration=4)
+            if len(y) == 0:
+                keepers.append(path)
+                continue
+            spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=64)
+            log_spec = librosa.power_to_db(spec, ref=np.max)
+            min_v, max_v = log_spec.min(), log_spec.max()
+            if max_v - min_v > 0:
+                img = Image.fromarray((255 * (log_spec - min_v) / (max_v - min_v)).astype(np.uint8))
+            else:
+                img = Image.fromarray(np.zeros_like(log_spec, dtype=np.uint8))
+            h = str(imagehash.phash(img))
+        except Exception:
+            keepers.append(path)
+            continue
+
+        original = seen.get(h)
+        if original is None:
+            seen[h] = path
+            keepers.append(path)
+        else:
+            duplicates.append(
+                {
+                    "original": str(original),
+                    "duplicates": [{"path": str(path), "similarity": 1.0}],
+                    "similarity_threshold": 1.0,
+                }
+            )
+            duplicate_count += 1
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
+
+
+def _deduplicate_by_mfcc(paths: Sequence[Path], config: AudioDedupConfig) -> Dict[str, Any]:
+    if librosa is None:
+        raise RuntimeError("librosa is required for MFCC audio deduplication")
+    if len(paths) > config.max_candidates:
+        print(
+            f"[audio pipeline] candidate count {len(paths)} exceeds max_candidates={config.max_candidates}; "
+            "skipping MFCC similarity dedup and treating all files as unique."
+        )
+        return {
+            "keepers": list(paths),
+            "duplicates": [],
+            "duplicate_count": 0,
+            "skipped": len(paths),
+        }
+
+    feats: List[np.ndarray] = []
+    valid_paths: List[Path] = []
+    for path in paths:
+        try:
+            y, sr = librosa.load(str(path), sr=16000, duration=4)
+            if len(y) == 0:
+                continue
+            mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
+            feat = np.mean(mfcc.T, axis=0)
+            norm = np.linalg.norm(feat)
+            if norm > 0:
+                feat = feat / norm
+            feats.append(feat.astype(np.float32))
+            valid_paths.append(path)
+        except Exception:
+            continue
+
+    if not feats:
+        return {
+            "keepers": list(paths),
+            "duplicates": [],
+            "duplicate_count": 0,
+            "skipped": 0,
+        }
+
+    feats_arr = np.stack(feats, axis=0)
+    sim_mat = feats_arr @ feats_arr.T
+    np.fill_diagonal(sim_mat, 0)
+
+    to_remove: set[int] = set()
+    duplicates: List[Dict[str, object]] = []
+    duplicate_count = 0
+
+    for i in range(sim_mat.shape[0]):
+        if i in to_remove:
+            continue
+        dups = np.where(sim_mat[i] > config.mfcc_threshold)[0]
+        dup_entries: List[Dict[str, object]] = []
+        for j in dups:
+            if j > i:
+                to_remove.add(j)
+                dup_entries.append({"path": str(valid_paths[j]), "similarity": float(sim_mat[i, j])})
+        if dup_entries:
+            duplicates.append(
+                {
+                    "original": str(valid_paths[i]),
+                    "duplicates": dup_entries,
+                    "similarity_threshold": float(config.mfcc_threshold),
+                }
+            )
+            duplicate_count += len(dup_entries)
+
+    keepers = [valid_paths[i] for i in range(len(valid_paths)) if i not in to_remove]
+
+    # Restore any paths that failed feature extraction
+    processed_set = set(valid_paths)
+    for path in paths:
+        if path not in processed_set:
+            keepers.append(path)
+
+    return {
+        "keepers": keepers,
+        "duplicates": duplicates,
+        "duplicate_count": duplicate_count,
+        "skipped": 0,
+    }
 
 
 def _deduplicate_by_jaccard(

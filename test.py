@@ -6,7 +6,7 @@ import glob
 import sys
 
 # 你的 embeddings 检查代码（保留）
-path = r"D:\桌面\Deduplication_Framework\embeddings\image_embeddings.npy"
+path = r"D:\Deduplication_Framework\embeddings\image_embeddings.npy"
 size = os.path.getsize(path)
 print("bytes:", size)
 # 常见 dtype 与候选维度
@@ -21,7 +21,7 @@ for name, b in dtypes:
             print(f"  可能 shape: (N={N}, D={D})")
 
 # 查找 cluster 文件（更稳健）
-clusters_dir = r"D:\桌面\Deduplication_framework\image\clustering\results\ncentroids_2000\sorted_clusters"
+clusters_dir = r"D:\Deduplication_framework\image\clustering\results\ncentroids_2000\sorted_clusters"
 pattern = os.path.join(clusters_dir, "cluster_*.pkl")
 files = glob.glob(pattern)
 if not files:

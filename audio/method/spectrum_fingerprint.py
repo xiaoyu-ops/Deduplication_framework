@@ -105,7 +105,7 @@ def load_config_json(config_path):
     
 if __name__ == "__main__":
 
-    config_path = r"D:\桌面\Deduplication_framework\audio\method\audio_config.json"
+    config_path = r"D:\Deduplication_framework\audio\method\audio_config.json"
     data = load_config_json(config_path)
     # 指定包含WAV文件的目录
     audio_directory = data.get("paths", {}).get("dataset_dir", "./audio/dataset")

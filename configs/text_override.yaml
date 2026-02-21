@@ -5,6 +5,11 @@ embedding:
   collapse_whitespace: true
 
 dedup:
-  method: jaccard
-  threshold: 0.5
+  method: ours_lsh
+  threshold: 0.8
   max_candidates: 200000
+  num_perm: 128
+  max_words: 200
+  max_char_grams: 200
+  simhash_dist: 10
+  simhash_window: 1000

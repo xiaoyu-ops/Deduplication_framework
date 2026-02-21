@@ -117,3 +117,4 @@ wrapt @ file:///D:/bld/wrapt_1736869459848/work
 xxhash==3.5.0
 yarl==1.18.3
 zipp @ file:///home/conda/feedstock_root/build_artifacts/zipp_1732827521216/work
+webdataset==0.2.86

@@ -54,6 +54,8 @@ scikit-learn==1.6.1
 scipy==1.13.1
 seaborn==0.13.2
 six==1.17.0
+simhash==2.1.2
+datasketch==1.6.5
 sympy==1.13.1
 threadpoolctl==3.6.0
 tokenizers==0.21.4

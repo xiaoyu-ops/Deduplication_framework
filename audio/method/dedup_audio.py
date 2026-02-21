@@ -5,7 +5,7 @@ from datasets import load_dataset
 import matplotlib.pyplot as plt
 
 # 创建缓存目录（在导入datasets前）
-cache_dir = "D:\\桌面\\audio_deduptation\\cache"
+cache_dir = "D:\\\audio_deduptation\\cache"
 os.makedirs(cache_dir, exist_ok=True)
 
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体

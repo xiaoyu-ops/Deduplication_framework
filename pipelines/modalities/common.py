@@ -25,16 +25,16 @@ def load_input_paths(env_var: str) -> Tuple[List[Path], Path | None]:
         print(f"[modalities] env {env_var} missing; fallback to empty list")
         return [], None
     manifest_path = Path(manifest_env)
+    
+    print(f"[modalities] Loading manifest from {manifest_path}...", flush=True)
     lines = _read_lines(manifest_path)
-    paths = [Path(line).resolve() for line in lines]
-    resolved: List[Path] = []
-    for p in paths:
-        if p.exists():
-            resolved.append(p)
-            continue
-        fallback = Path(os.path.normpath(str(p)))
-        resolved.append(fallback)
-    return resolved, manifest_path
+    
+    # Optimization: processing 3.8M paths with resolve() is extremely slow on Windows.
+    # We use simple Path() construction. Abspath is assumed or acceptable.
+    print(f"[modalities] Parsing {len(lines)} paths (skipping resolve for speed)...", flush=True)
+    paths = [Path(line) for line in lines]
+    
+    return paths, manifest_path
 
 
 def ensure_output_dir(env_var: str) -> Path | None:
@@ -61,7 +61,15 @@ def copy_existing_files(paths: Iterable[Path], output_dir: Path) -> Dict[str, in
             if dest.exists():
                 skipped += 1
                 continue
-            shutil.copy2(src, dest)
+            
+            # Use Hard Link (os.link) to save space and time. 
+            # Fallback to copy only if link fails (e.g. cross-drive).
+            try:
+                os.link(src, dest)
+            except OSError:
+                print(f"[modalities] Hard link failed for {src}; falling back to copy.", flush=True)
+                shutil.copy2(src, dest)
+                
             copied += 1
         except Exception as exc:  # pragma: no cover
             skipped += 1
