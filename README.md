@@ -1,50 +1,117 @@
-# Multimodal Deduplication Framework
+# MMdedup: A Parallel and Pipelined Multimodal Data Deduplication Framework for MLLM Training
 
-A high-performance, modular framework for deduplicating large multimodal datasets (images, audio, and text).
+**MMdedup** is a highly efficient, end-to-end framework designed to clean the "digital swamp" of raw, heterogeneous web data for Multimodal Large Language Model (MLLM) training. It integrates a robust automated classification front-end with modality-aware deep deduplication pipelines for text, images, and audio.
 
-## Key Innovation — Quality-Aware Semantic Deduplication (Q-SemDeDup)
+## 🌟 Key Contributions
 
-Traditional semantic deduplication techniques (for example, SemDeDup) typically pick the clip closest to a cluster centroid. In practice this representative item can be low quality (low resolution, compressed, or small file size). Q-SemDeDup augments semantic similarity with a quality-aware score so the retained exemplar is both representative and high quality.
+* 
+**"Classification-before-Clean" Architecture**: A parallel and pipelined design that transforms unstructured, mixed-modality harvests into high-quality training corpora.
 
-Score formula:
 
-$$
-Score = \alpha \cdot Sim(x, C) + (1-\alpha) \cdot Norm(Quality(x))
-$$
+* 
+**Adversarial-Robust Sorter**: A lightweight heuristic classifier that achieves **100% accuracy** on files with misleading extensions or JSON-wrapped references, maintaining a high throughput of 4.25K files/s.
 
-Where:
-- $Sim(x, C)$ is semantic similarity to the cluster centroid (representativeness).
-- $Quality(x)$ is a quality proxy (file size, resolution, bitrate, etc.).
-- $\alpha$ (default 0.7) controls the trade-off between semantic fidelity and media quality.
 
-This approach ensures the dataset retains the highest-utility item from each duplicate cluster, improving downstream training and evaluation quality.
+* **Modality-Specific Deep Cleaning**:
+* 
+**Image**: Utilizes **CLIP-ViT-B-16 embeddings** and a divide-and-conquer clustering strategy to detect semantic near-duplicates.
 
-## Features
 
-- Automated, zero-shot semantic deduplication without requiring precomputed indices.
-- Falls back to a lightweight folder-based strategy when memory is limited.
-- High-throughput batch processing with multi-worker parallelism (optimized throughput on typical hardware).
-- Multimodal support: Image (CLIP embeddings), Audio (fingerprinting / spectral features), and Text (MinHash / n-gram) pipelines.
+* 
+**Audio**: Implements **Spectral Fingerprinting** and MinHash-LSH to remove acoustically similar recordings.
 
-## Quickstart
 
-1. Configure your pipeline by editing `configs/my_pipeline.yaml` to point at your dataset and desired stages.
+* 
+**Text**: Employs a **Multi-Granularity N-gram** method to capture syntactic and lexical variations with 14% faster processing than standard MinHash.
 
-2. Run the pipeline:
+
+
+
+* 
+**Significant Efficiency Gains**: Achieves **3.6x higher throughput** in image deduplication compared to state-of-the-art SemDeDup while improving downstream model accuracy.
+
+
+
+## 📊 Experimental Results
+
+Our evaluation on nearly **1TB** of data shows that MMdedup effectively balances data reduction and model performance:
+
+| Modality | Deduplication Rate | Downstream Test Acc. | Storage Saving |
+| --- | --- | --- | --- |
+| **Image** (ImageNet-Exp) | ~67.25% 
+
+ | 69.58% 
+
+ | 46% - 90% 
+
+ |
+| **Audio** (ESC-Exp) | ~77.48% 
+
+ | <br>**92.01%** 
+
+ | 46% - 90% 
+
+ |
+| **Text** (Amazon-Exp) | ~90.03% 
+
+ | 83.14% 
+
+ | 46% - 90% 
+
+ |
+
+> 
+> **Note**: Near-duplicate detection alone contributes over **20 percentage points** of additional deduplication beyond exact binary matching.
+> 
+> 
+
+## 🛠️ System Architecture
+
+MMdedup operates in two primary phases:
+
+1. 
+**Phase 1 (Sorter)**: Uses magic number sniffing, printability analysis, and semantic parsing to route files into modality streams.
+
+
+2. 
+**Phase 2 (Deduplication)**: Each stream undergoes a lightweight SHA-256 exact match followed by an algorithmic near-duplicate removal pass.
+
+
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+* Python 3.10+ 
+
+
+* PyTorch 2.0+ 
+
+
+* NVIDIA GPU (RTX 3090/4090 recommended for CLIP inference) 
+
+
+
+### Installation
 
 ```bash
-python -m pipelines.multimodal_runner --config configs/my_pipeline.yaml
+git clone https://github.com/your-username/MMdedup.git
+cd MMdedup
+pip install -r requirements.txt
+
 ```
 
-## Example: Image 10k Subset Benchmark
+*Dependencies: `open_clip_torch`, `faiss-gpu`, `librosa`, `datasketch`, `scikit-learn*`.
 
-| Method | Precision | Recall | Speed | Note |
-|---|---:|---:|---:|---|
-| Ours (Q-SemDeDup) | 85.2% | 69%–90%* | 141 imgs/s | Includes quality-aware selection |
-| SemDeDup (original) | 93.7% | 96.2% | 27.9 imgs/s | Precomputed indices required |
-| SimCLR (baseline) | 18.2% | 99.6% | 45.0 imgs/s | Low precision |
+### Basic Usage
 
-*See `docs/README.md` for full evaluation details and dataset setup.
+```python
+# Run the full pipeline
+python main.py --input_dir ./raw_data --output_dir ./clean_data
 
----
-For full documentation and examples, see [docs/README.md](docs/README.md).
+# Or run specific modules
+python sorter.py --input ./raw_data
+python image_dedup.py --input ./images --threshold 0.1
+
+```
+
