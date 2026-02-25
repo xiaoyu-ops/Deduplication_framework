@@ -1,119 +1,101 @@
-import os
-import numpy as np
-import librosa
-import matplotlib.pyplot as plt
-from skimage.filters import threshold_otsu
-from skimage.transform import resize
-from tqdm import tqdm
-import glob
-import json
+import os 
+import numpy as np 
+import librosa 
+import matplotlib .pyplot as plt 
+from skimage .filters import threshold_otsu 
+from skimage .transform import resize 
+from tqdm import tqdm 
+import glob 
+import json 
 
-def create_binary_spectrogram(audio_file, output_file=None, show_plot=False):
-    """
-    从音频文件生成二值化频谱图指纹
-    
-    参数:
-        audio_file: 输入音频文件路径
-        output_file: 输出图像路径(可选)
-    
-    返回:
-        二值化频谱图数组
-    """
-    # 加载音频文件
-    y, sr = librosa.load(audio_file, sr=None)
-    
-    # 计算STFT (短时傅里叶变换)
-    D = librosa.stft(y, n_fft=2048, hop_length=64)
-    
-    # 将复数STFT转换为幅度谱
-    magnitude = np.abs(D)
-    
-    # 取对数以突出较弱信号
-    log_magnitude = librosa.amplitude_to_db(magnitude, ref=np.max)
-    
-    # 翻转频率轴使低频在底部
-    log_magnitude = np.flipud(log_magnitude)
-    
-    # 应用阈值处理 - 只保留高能量区域
-    threshold = threshold_otsu(log_magnitude)
-    binary_spectrogram = log_magnitude > (threshold + 6)  # 增加阈值以减少白点
-    
-    # 调整图像大小为128x32
-    binary_spectrogram_resized = resize(binary_spectrogram, (32, 128), 
-                                         anti_aliasing=False, preserve_range=True).astype(bool)
-    
-    # 将布尔值转换为0和1
-    binary_spectrogram_resized = binary_spectrogram_resized.astype(np.uint8)
-    frequencyPeaks = np.reshape(binary_spectrogram_resized, (4096,))
-    # Log in English to avoid encoding issues on Windows consoles
-    print(f"Processed file {audio_file}: generated 4096-dim fingerprint vector")
-    
-    return frequencyPeaks
+def create_binary_spectrogram (audio_file ,output_file =None ,show_plot =False ):
 
-def process_wav_files(audio_dir, output_file="audio/binary_array_dict.npy"):
-    """
-    处理指定目录下的所有WAV文件
-    
-    参数:
-        audio_dir: 包含WAV文件的目录路径
-        output_file: 输出的numpy文件名
-    """
-    # 查找所有WAV文件
-    wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
-    
-    if not wav_files:
-        print(f"No WAV files found in directory: {audio_dir}")
-        return
+    y ,sr =librosa .load (audio_file ,sr =None )
 
-    print(f"Found {len(wav_files)} WAV files in {audio_dir}")
-    
-    binary_array_dict = {}
-    
-    for index, wav_file in enumerate(tqdm(wav_files, desc="处理WAV文件")):
-        try:
-            # 直接处理WAV文件，无需临时文件
-            binary_spec = create_binary_spectrogram(wav_file, output_file=None, show_plot=False)
-            
-            # 使用文件名作为键，或者使用索引
-            filename = os.path.basename(wav_file)
-            binary_array_dict[filename] = binary_spec
-            # 或者使用索引: binary_array_dict[index] = binary_spec
-            
-        except Exception as e:
-            print(f"Failed to process file {wav_file}: {e}")
-            continue
-    
-        print(f"Successfully processed {len(binary_array_dict)} files")
-    
-        # Save results
-        np.save(output_file, binary_array_dict)
-        print(f"Saved audio fingerprint vectors to: {output_file}")
-    
-    return binary_array_dict
 
-def load_config_json(config_path):
-    """从 JSON 配置文件加载配置，出错时返回 None"""
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"Config file not found: {config_path}")
-        return None
-    except json.JSONDecodeError as e:
-        print(f"Config file JSON error: {e}")
-        return None
-    
-if __name__ == "__main__":
+    D =librosa .stft (y ,n_fft =2048 ,hop_length =64 )
 
-    config_path = r"D:\Deduplication_framework\audio\method\audio_config.json"
-    data = load_config_json(config_path)
-    # 指定包含WAV文件的目录
-    audio_directory = data.get("paths", {}).get("dataset_dir", "./audio/dataset")
-    #audio_directory = "./audio/dataset"  # 修改为你的WAV文件目录
-    
-    # 处理WAV文件
-    result = process_wav_files(audio_directory)
-    
-    if result:
-        print("Processing complete!")
-        print(f"Generated fingerprint dictionary contains {len(result)} audio files")
+
+    magnitude =np .abs (D )
+
+
+    log_magnitude =librosa .amplitude_to_db (magnitude ,ref =np .max )
+
+
+    log_magnitude =np .flipud (log_magnitude )
+
+
+    threshold =threshold_otsu (log_magnitude )
+    binary_spectrogram =log_magnitude >(threshold +6 )
+
+
+    binary_spectrogram_resized =resize (binary_spectrogram ,(32 ,128 ),
+    anti_aliasing =False ,preserve_range =True ).astype (bool )
+
+
+    binary_spectrogram_resized =binary_spectrogram_resized .astype (np .uint8 )
+    frequencyPeaks =np .reshape (binary_spectrogram_resized ,(4096 ,))
+
+    print (f"Processed file {audio_file}: generated 4096-dim fingerprint vector")
+
+    return frequencyPeaks 
+
+def process_wav_files (audio_dir ,output_file ="audio/binary_array_dict.npy"):
+
+    wav_files =glob .glob (os .path .join (audio_dir ,"*.wav"))
+
+    if not wav_files :
+        print (f"No WAV files found in directory: {audio_dir}")
+        return 
+
+    print (f"Found {len(wav_files)} WAV files in {audio_dir}")
+
+    binary_array_dict ={}
+
+    for index ,wav_file in enumerate (tqdm (wav_files ,desc ="处理WAV文件")):
+        try :
+
+            binary_spec =create_binary_spectrogram (wav_file ,output_file =None ,show_plot =False )
+
+
+            filename =os .path .basename (wav_file )
+            binary_array_dict [filename ]=binary_spec 
+
+
+        except Exception as e :
+            print (f"Failed to process file {wav_file}: {e}")
+            continue 
+
+        print (f"Successfully processed {len(binary_array_dict)} files")
+
+
+        np .save (output_file ,binary_array_dict )
+        print (f"Saved audio fingerprint vectors to: {output_file}")
+
+    return binary_array_dict 
+
+def load_config_json (config_path ):
+    try :
+        with open (config_path ,'r',encoding ='utf-8')as f :
+            return json .load (f )
+    except FileNotFoundError :
+        print (f"Config file not found: {config_path}")
+        return None 
+    except json .JSONDecodeError as e :
+        print (f"Config file JSON error: {e}")
+        return None 
+
+if __name__ =="__main__":
+
+    config_path =r"D:\Deduplication_framework\audio\method\audio_config.json"
+    data =load_config_json (config_path )
+
+    audio_directory =data .get ("paths",{}).get ("dataset_dir","./audio/dataset")
+
+
+
+    result =process_wav_files (audio_directory )
+
+    if result :
+        print ("Processing complete!")
+        print (f"Generated fingerprint dictionary contains {len(result)} audio files")

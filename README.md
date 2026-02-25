@@ -1,51 +1,50 @@
-# Multimodal Deduplication Framework (多模态去重框架)
+# Multimodal Deduplication Framework
 
-A high-performance, modular framework for deduplicating massive multi-modal datasets (Image, Audio, Text).
+A high-performance, modular framework for deduplicating large multimodal datasets (images, audio, and text).
 
-## 🚀 Key Innovation: Quality-Aware Semantic Deduplication (Q-SemDeDup)
+## Key Innovation — Quality-Aware Semantic Deduplication (Q-SemDeDup)
 
-Unlike traditional methods (e.g., SemDeDup) that blindly select the image closest to the cluster centroid, our framework introduces **Quality-Aware Sorting**.
+Traditional semantic deduplication techniques (for example, SemDeDup) typically pick the clip closest to a cluster centroid. In practice this representative item can be low quality (low resolution, compressed, or small file size). Q-SemDeDup augments semantic similarity with a quality-aware score so the retained exemplar is both representative and high quality.
 
-- **The Problem**: The "most representative" image in a cluster is mathematically closest to the centroid but often suffers from low resolution, compression artifacts, or small file size.
-- **Our Solution**: We implement a **Utility-Preserving** selection strategy.
-    
-    $$ Score = \alpha \cdot Sim(x, C) + (1-\alpha) \cdot Norm(Quality(x)) $$
-    
-    Where:
-    - $Sim(x, C)$ is the semantic similarity to the cluster centroid (Representativeness).
-    - $Quality(x)$ is the image quality metric (e.g., file size/resolution).
-    - $\alpha$ (default 0.7) balances semantic precision with visual quality.
+Score formula:
 
- This ensures that **we retain the highest quality version** of an image among duplicates, effectively functioning as both a deduplicator and a dataset cleaner.
+$$
+Score = \alpha \cdot Sim(x, C) + (1-\alpha) \cdot Norm(Quality(x))
+$$
 
-## 🌟 Features
+Where:
+- $Sim(x, C)$ is semantic similarity to the cluster centroid (representativeness).
+- $Quality(x)$ is a quality proxy (file size, resolution, bitrate, etc.).
+- $\alpha$ (default 0.7) controls the trade-off between semantic fidelity and media quality.
 
-- **Automated Zero-Shot SemDeDup**: 
-  - No need for pre-computed K-Means indices.
-  - Automatically runs `MiniBatchKMeans` on-the-fly for global deduplication if no indices are provided.
-  - Falls back to `Folder-based` strategy if memory is constrained.
-- **High Throughput**: 
-  - Optimized for batch processing with multi-worker parallelism.
-  - achieving >140 imgs/s on standard hardware (5x faster than baseline SemDeDup).
-- **Multi-Modal**: Supports Image (CLIP), Audio (Fingerprinting), and Text (MinHash/N-gram) pipelines.
+This approach ensures the dataset retains the highest-utility item from each duplicate cluster, improving downstream training and evaluation quality.
 
-## 🛠️ Usage
+## Features
 
-### 1. Configure
-Edit `configs/my_pipeline.yaml` to point to your dataset.
+- Automated, zero-shot semantic deduplication without requiring precomputed indices.
+- Falls back to a lightweight folder-based strategy when memory is limited.
+- High-throughput batch processing with multi-worker parallelism (optimized throughput on typical hardware).
+- Multimodal support: Image (CLIP embeddings), Audio (fingerprinting / spectral features), and Text (MinHash / n-gram) pipelines.
 
-### 2. Run
+## Quickstart
+
+1. Configure your pipeline by editing `configs/my_pipeline.yaml` to point at your dataset and desired stages.
+
+2. Run the pipeline:
+
 ```bash
 python -m pipelines.multimodal_runner --config configs/my_pipeline.yaml
 ```
 
-## 📊 Performance Benchmark (Image 10k Subset)
+## Example: Image 10k Subset Benchmark
 
 | Method | Precision | Recall | Speed | Note |
-| :--- | :--- | :--- | :--- | :--- |
-| **Ours (System)** | **85.2%** | **69% - 90%*** | **141 imgs/s** | *Includes Quality Selection |
-| SemDeDup (Original) | 93.7% | 96.2% | 27.9 imgs/s | Static, Pre-computed only |
-| SimCLR | 18.2% | 99.6% | 45.0 imgs/s | Low precision |
+|---|---:|---:|---:|---|
+| Ours (Q-SemDeDup) | 85.2% | 69%–90%* | 141 imgs/s | Includes quality-aware selection |
+| SemDeDup (original) | 93.7% | 96.2% | 27.9 imgs/s | Precomputed indices required |
+| SimCLR (baseline) | 18.2% | 99.6% | 45.0 imgs/s | Low precision |
+
+*See `docs/README.md` for full evaluation details and dataset setup.
 
 ---
-*For detailed documentation, see [docs/README.md](docs/README.md).*
+For full documentation and examples, see [docs/README.md](docs/README.md).
